@@ -16,13 +16,60 @@ import wikipedia
 import re
 from googlesearch import search as google_search
 from concurrent.futures import ThreadPoolExecutor
+import numpy as np
+from scipy.io import wavfile
+import librosa
+from langdetect import detect
+import sounddevice as sd
+import wave
+import hashlib
+import base64
+from typing import Dict, List, Optional, Tuple
 
 class JarvisAssistant:
-    def __init__(self, api_key, user_name="Yaduraj", web_mode=True):
+    def __init__(self, api_key, user_name="Yaduraj"):
         # User information
         self.user_name = user_name
         self.user_title = "sir"  # Iron Man style addressing
-        self.web_mode = web_mode
+        
+        # Voice authentication settings
+        self.voice_profiles = {}  # Store voice profiles for authentication
+        self.current_user = None
+        self.auth_required = False  # Disabled by default
+        
+        # Voice emotion detection settings
+        self.emotion_model = None  # Will be initialized with a pre-trained model
+        self.current_emotion = None
+        self.emotion_history = []
+        
+        # Multi-language support
+        self.supported_languages = {
+            'en': 'English',
+            'es': 'Spanish',
+            'fr': 'French',
+            'de': 'German',
+            'it': 'Italian',
+            'pt': 'Portuguese',
+            'ru': 'Russian',
+            'ja': 'Japanese',
+            'ko': 'Korean',
+            'zh': 'Chinese'
+        }
+        self.current_language = 'en'
+        
+        # Voice activity detection settings
+        self.vad_threshold = 0.3
+        self.silence_duration = 1.0
+        self.last_speech_time = None
+        
+        # Enhanced voice synthesis settings
+        self.voice_settings = {
+            'rate': 165,  # Speech rate
+            'volume': 1.0,  # Volume level
+            'pitch': 1.0,  # Pitch level
+            'emphasis': 1.0,  # Emphasis level
+            'pause_duration': 0.1  # Pause between sentences
+        }
         
         # Initialize Gemini API
         self.api_key = api_key
@@ -45,45 +92,42 @@ class JarvisAssistant:
         self.response_cache = {}
         self.max_cache_size = 50  # Maximum number of cached responses
         
-        # Initialize speech engine only in CLI mode
-        if not web_mode:
-            try:
-                self.engine = pyttsx3.init()
-                voices = self.engine.getProperty('voices')
-                self.engine.setProperty('voice', voices[0].id)
-                self.engine.setProperty('rate', 165)
-                self.engine.setProperty('volume', 1.0)
-                self.engine.say("")
-                self.engine.runAndWait()
-                print("Speech engine initialized successfully")
-            except Exception as e:
-                print(f"Error initializing speech engine: {e}")
+        # Initialize speech engine with optimized settings
+        try:
+            self.engine = pyttsx3.init()
+            
+            # Configure voice to sound more like movie Jarvis
+            voices = self.engine.getProperty('voices')
+            self.engine.setProperty('voice', voices[0].id)  # Male voice
+            self.engine.setProperty('rate', 165)  # Slightly slower for the British butler feel
+            self.engine.setProperty('volume', 1.0)  # Full volume
+            
+            # Pre-warm the speech engine to reduce latency on first speak
+            self.engine.say("")
+            self.engine.runAndWait()
+            print("Speech engine initialized successfully")
+        except Exception as e:
+            print(f"Error initializing speech engine: {e}")
+            print("Continuing with limited functionality")
         
-        # Initialize speech recognition only in CLI mode
-        if not web_mode:
-            self.recognizer = sr.Recognizer()
-            self.recognizer.energy_threshold = 300
-            self.recognizer.dynamic_energy_threshold = True
-            self.recognizer.pause_threshold = 0.6
-            self.check_microphone()
+        # Initialize speech recognition with optimized settings
+        self.recognizer = sr.Recognizer()
+        self.recognizer.energy_threshold = 300  # Adjust based on your microphone sensitivity
+        self.recognizer.dynamic_energy_threshold = True
+        self.recognizer.pause_threshold = 0.6  # Shorter pause threshold for faster response
+        
+        # Check microphone
+        self.check_microphone()
+        
+        # Conversation history for context
+        self.conversation_history = []
         
         # Assistant state
         self.active = True
         self.listening_mode = True
-        self.verbose_mode = True
-        self.currently_speaking = False
-        self.interrupt_speech = False
-        
-        # Load saved data
-        self.load_data()
-        
-        # Only show boot sequence in CLI mode
-        if not web_mode:
-            self.system_boot()
-        
-        self.workflows = []  # Store workflows in memory
-        self.last_response = None
-        self.conversation_history = []
+        self.verbose_mode = True  # For detailed responses
+        self.currently_speaking = False  # Flag to track if Jarvis is speaking
+        self.interrupt_speech = False  # Flag to handle interruptions
         
         # Jarvis speech patterns
         self.acknowledgments = [
@@ -136,7 +180,7 @@ class JarvisAssistant:
             "system": self.system_info,
             "cpu": self.cpu_info,
             "memory": self.memory_info,
-            "ip": self.ip_info,
+            "ip": lambda cmd: self.ip_info(),  # Fix ip_info to ignore command parameter
             "joke": self.tell_joke,
             "note": self.take_note,
             "read notes": self.read_notes,
@@ -167,6 +211,16 @@ class JarvisAssistant:
         # Media player state
         self.music_playing = False
         self.current_volume = 70  # percent
+        
+        # Load saved data if available
+        self.load_data()
+        
+        # Start reminder checker in background
+        self.reminder_thread = threading.Thread(target=self.check_reminders, daemon=True)
+        self.reminder_thread.start()
+        
+        # Initialization message
+        self.system_boot()
         
     def system_boot(self):
         """Simulate Jarvis boot sequence"""
@@ -200,21 +254,41 @@ class JarvisAssistant:
             return "Good evening"
     
     def speak(self, text, print_output=True):
-        """Modified speak function to work in both web and CLI modes"""
-        if print_output:
-            print(f"JARVIS: {text}")
-        
-        if not self.web_mode:
-            # Only use text-to-speech in CLI mode
-            text = text.replace(',', ', ')
-            text = text.replace('.', '. ')
-            text = text.replace('?', '? ')
+        """Convert text to speech with enhanced features"""
+        try:
+            # Enhance speech with natural intonation and emphasis
+            enhanced_text = self.enhance_speech(text)
             
-            chunks = re.split('(?<=[.!?]) +', text)
+            # Add short pauses for more natural speech using commas and periods
+            enhanced_text = enhanced_text.replace(',', ', ')
+            enhanced_text = enhanced_text.replace('.', '. ')
+            enhanced_text = enhanced_text.replace('?', '? ')
+            
+            # Add some British butler-like phrases occasionally
+            if random.random() < 0.1 and not text.startswith(("I'm afraid", "Unfortunately")):
+                british_phrases = [
+                    f"If I may say so, {self.user_title}, ",
+                    f"I believe, {self.user_title}, that ",
+                    f"Might I suggest that ",
+                    f"If I may be so bold, {self.user_title}, ",
+                    f"Indeed, {self.user_title}, "
+                ]
+                enhanced_text = random.choice(british_phrases) + enhanced_text[0].lower() + enhanced_text[1:]
+            
+            if print_output:
+                print(f"JARVIS: {text}")
+            
+            # Break speech into chunks for better interruption handling
+            chunks = re.split('(?<=[.!?]) +', enhanced_text)
             
             self.currently_speaking = True
             self.interrupt_speech = False
             
+            # Apply voice settings
+            self.engine.setProperty('rate', self.voice_settings['rate'])
+            self.engine.setProperty('volume', self.voice_settings['volume'])
+            
+            # Speak each chunk, allowing for interruption between them
             for chunk in chunks:
                 if self.interrupt_speech:
                     self.currently_speaking = False
@@ -223,14 +297,19 @@ class JarvisAssistant:
                     
                 self.engine.say(chunk)
                 self.engine.runAndWait()
+                
+                # Brief pause to check for interruptions
                 time.sleep(0.1)
             
             self.currently_speaking = False
-        
-        return text
+            
+        except Exception as e:
+            print(f"Error in speech synthesis: {e}")
+            if print_output:
+                print(f"JARVIS: {text}")  # Fallback to text output
     
     def listen(self, timeout=5, interrupt_mode=False):
-        """Listen for voice commands with optional interruption mode"""
+        """Listen for voice commands with enhanced features"""
         with sr.Microphone() as source:
             if not interrupt_mode:
                 print("Listening...")
@@ -238,15 +317,47 @@ class JarvisAssistant:
             # Reduce the duration of ambient noise adjustment
             self.recognizer.adjust_for_ambient_noise(source, duration=0.2)
             try:
-                # Reduce timeout and phrase_time_limit for faster response
+                # Record audio with voice activity detection
                 audio = self.recognizer.listen(source, timeout=3, phrase_time_limit=10)
+                
+                # Convert audio to numpy array for processing
+                audio_data = np.frombuffer(audio.get_raw_data(), dtype=np.int16).astype(np.float32)
+                
+                # Detect voice activity
+                if not self.detect_voice_activity(audio_data):
+                    if not interrupt_mode:
+                        print("No voice activity detected")
+                    return ""
+                
+                # Authenticate user if required
+                if self.auth_required and not self.authenticate_user(audio_data):
+                    self.speak("I'm sorry, but I couldn't verify your voice. Please try again.")
+                    return ""
+                
+                # Detect emotion
+                emotion = self.detect_emotion(audio_data)
+                if emotion != "neutral":
+                    print(f"Detected emotion: {emotion}")
+                
                 if not interrupt_mode:
                     print("Processing speech...")
-                # Use recognize_google with shorter timeout
-                text = self.recognizer.recognize_google(audio, language='en-US')
+                
+                # Use recognize_google with language detection
+                text = self.recognizer.recognize_google(audio, language=self.current_language)
+                
+                # Analyze speaking pace and adjust Jarvis's speech rate
+                if len(text.split()) > 3:  # Only analyze if there are enough words
+                    self.analyze_speaking_pace(audio_data, text)
+                
+                # Detect language if not already set
+                detected_lang = self.detect_language(text)
+                if detected_lang != self.supported_languages[self.current_language]:
+                    print(f"Detected language: {detected_lang}")
+                
                 if not interrupt_mode:
                     print(f"You said: {text}")
                 return text.lower()
+                
             except sr.UnknownValueError:
                 if not interrupt_mode:
                     print("Could not understand audio")
@@ -349,7 +460,7 @@ class JarvisAssistant:
             self.conversation_history.append((query, cleaned_response))
             if len(self.conversation_history) > self.context_window:
                 self.conversation_history.pop(0)
-            
+                
             # Cache the response
             self.cache_response(query, cleaned_response)
             
@@ -404,7 +515,7 @@ class JarvisAssistant:
         else:
             return f"I'm afraid my weather systems require configuration with an OpenWeatherMap API key, {self.user_title}. Would you like me to help you set that up? It's a rather simple process."
     
-    def open_browser(self):
+    def open_browser(self, command=""):
         """Open web browser"""
         try:
             webbrowser.open("https://www.google.com")
@@ -1046,74 +1157,67 @@ class JarvisAssistant:
             return None
 
     def process_command(self, command):
-        """Process commands from both web and CLI interfaces"""
+        """Process user commands with enhanced context awareness"""
         try:
-            # Clean the command
-            command = command.strip().lower()
+            # Remove wake word check to respond to all commands
+            clean_command = command.replace("jarvis", "").replace("hey", "").replace("okay", "").strip()
             
-            # Add to conversation history
-            self.conversation_history.append({"role": "user", "content": command})
+            # Log the command being processed
+            print(f"Processing command: '{clean_command}'")
             
-            # Update context
+            # Check for exit/quit commands
+            if any(exit_cmd in clean_command for exit_cmd in ["exit", "quit", "goodbye", "bye", "shut down", "power off"]):
+                self.speak(f"Shutting down systems. Goodbye, {self.user_title}.")
+                self.active = False
+                return
+            
+            # Handle preference storage
+            if "remember" in clean_command.lower():
+                response = self.remember_preference(clean_command)
+                self.speak(response)
+                return
+            
+            # Check for follow-up questions
+            followup_query = self.handle_followup(clean_command)
+            if followup_query:
+                clean_command = followup_query
+            
+            # Update conversation context
             self.last_query_time = datetime.datetime.now()
             
-            # Check for direct feature matches
+            # Check for news article opening command
+            if re.search(r"(?:open|show|read)\s+(?:article|news)", clean_command, re.IGNORECASE):
+                response = self.open_news_article(clean_command)
+                self.speak(response)
+                return
+            
+            # Fast path for common commands - check direct feature matches first
             for feature_key, feature_func in self.features.items():
-                if feature_key in command:
-                    self.last_topic = feature_key
-                    response = feature_func(command)
-                    self.conversation_history.append({"role": "assistant", "content": response})
-                    return response
+                if feature_key in clean_command:
+                    print(f"Feature match found: {feature_key}")
+                    self.last_topic = feature_key  # Store the topic
+                    response = feature_func(clean_command)
+                    self.speak(response)
+                    return
+            
+            # Check for volume control as a special case
+            if "volume" in clean_command:
+                response = self.adjust_volume(clean_command)
+                self.speak(response)
+                return
             
             # If no direct match, use Gemini for general conversation
-            response = self.get_gemini_response(command)
-            self.conversation_history.append({"role": "assistant", "content": response})
-            return response
+            print("No direct feature match, using Gemini API")
+            response = self.get_gemini_response(clean_command)
+            self.speak(response)
+            
+            return
             
         except Exception as e:
             print(f"Error processing command: {e}")
-            return f"I apologize, {self.user_title}, but I encountered an error processing that command."
-
-    def get_workflows(self):
-        """Get all workflows"""
-        return self.workflows
-
-    def create_workflow(self, name):
-        """Create a new workflow"""
-        workflow = {
-            'id': len(self.workflows) + 1,
-            'name': name,
-            'created_at': datetime.now().isoformat(),
-            'steps': []
-        }
-        self.workflows.append(workflow)
-        return workflow
-
-    def execute_workflow(self, name):
-        """Execute a workflow by name"""
-        workflow = next((w for w in self.workflows if w['name'] == name), None)
-        if not workflow:
-            raise ValueError(f"Workflow '{name}' not found")
-        
-        # Execute each step in the workflow
-        responses = []
-        for step in workflow.get('steps', []):
-            try:
-                response = self.process_command(step)
-                responses.append(response)
-            except Exception as e:
-                responses.append(f"Error executing step: {e}")
-        
-        return " ".join(responses) if responses else f"Executed workflow: {name}"
-
-    def get_last_response(self):
-        """Get the last response from Jarvis"""
-        return self.last_response
-
-    def get_conversation_history(self):
-        """Get the conversation history"""
-        return self.conversation_history
-
+            self.speak(f"I apologize, {self.user_title}, but I encountered an error processing that command.")
+            return
+    
     def save_data(self):
         """Save user data to file"""
         try:
@@ -1123,8 +1227,7 @@ class JarvisAssistant:
                 "reminders": self.reminders,
                 "conversation_history": self.conversation_history,
                 "response_cache": self.response_cache,
-                "user_preferences": self.user_preferences,  # Add preferences to saved data
-                "workflows": self.workflows
+                "user_preferences": self.user_preferences  # Add preferences to saved data
             }
             
             with open("jarvis_data.json", "w") as f:
@@ -1146,7 +1249,6 @@ class JarvisAssistant:
                 self.conversation_history = data.get("conversation_history", [])
                 self.response_cache = data.get("response_cache", {})
                 self.user_preferences = data.get("user_preferences", {})  # Load preferences
-                self.workflows = data.get("workflows", [])
                 print("Data loaded successfully")
         except Exception as e:
             print(f"Error loading data: {e}")
@@ -1293,7 +1395,7 @@ class JarvisAssistant:
                 workflow['voice_triggers'] = self._setup_voice_triggers()
             
             # Save workflow
-            self.workflows.append(workflow)
+            self.workflows[workflow['name']] = workflow
             self.save_data()
             
             response = f"Workflow '{workflow_name}' has been created with {len(workflow['steps'])} steps."
@@ -1460,7 +1562,7 @@ class JarvisAssistant:
     def execute_workflow(self, workflow_name):
         """Execute a saved workflow with error handling and recovery"""
         try:
-            workflow = next((w for w in self.workflows if w['name'] == workflow_name), None)
+            workflow = self.workflows.get(workflow_name.lower().replace(" ", "_"))
             if not workflow:
                 return f"I couldn't find a workflow named '{workflow_name}', {self.user_title}."
             
@@ -1560,12 +1662,195 @@ class JarvisAssistant:
         response = self.listen()
         return response and 'yes' in response.lower()
 
+    def analyze_speaking_pace(self, audio_data: np.ndarray, text: str) -> float:
+        """Analyze user's speaking pace and return words per minute"""
+        try:
+            # Calculate audio duration in minutes
+            audio_duration = len(audio_data) / 16000 / 60  # assuming 16kHz sample rate
+            
+            # Count words in the text
+            word_count = len(text.split())
+            
+            # Calculate words per minute
+            wpm = word_count / audio_duration if audio_duration > 0 else 165  # default to 165 wpm
+            
+            # Smooth the rate change using moving average
+            if not hasattr(self, 'recent_speech_rates'):
+                self.recent_speech_rates = []
+            
+            self.recent_speech_rates.append(wpm)
+            if len(self.recent_speech_rates) > 5:  # Keep last 5 measurements
+                self.recent_speech_rates.pop(0)
+            
+            # Calculate smoothed rate
+            smoothed_wpm = sum(self.recent_speech_rates) / len(self.recent_speech_rates)
+            
+            # Map user's pace to Jarvis's speech rate (with limits)
+            new_rate = min(max(smoothed_wpm * 0.9, 120), 200)  # Keep rate between 120-200
+            
+            # Gradually adjust the speech rate
+            current_rate = self.voice_settings['rate']
+            adjusted_rate = current_rate + (new_rate - current_rate) * 0.3  # 30% adjustment
+            
+            # Update speech settings
+            self.voice_settings['rate'] = int(adjusted_rate)
+            
+            print(f"User speaking pace: {wpm:.0f} WPM")
+            print(f"Adjusted Jarvis speech rate to: {self.voice_settings['rate']} WPM")
+            
+            return wpm
+            
+        except Exception as e:
+            print(f"Error analyzing speaking pace: {e}")
+            return 165  # Default WPM
+
+    def detect_emotion(self, audio_data: np.ndarray) -> str:
+        """Detect emotion from audio data using pre-trained model"""
+        try:
+            # Extract audio features
+            mfccs = librosa.feature.mfcc(y=audio_data, sr=16000, n_mfcc=13)
+            spectral_center = librosa.feature.spectral_centroid(y=audio_data, sr=16000)
+            chroma = librosa.feature.chroma_stft(y=audio_data, sr=16000)
+            
+            # Combine features
+            features = np.concatenate([mfccs, spectral_center, chroma])
+            
+            # Use pre-trained model to predict emotion
+            # This is a placeholder - you would need to implement or load an actual model
+            emotions = ['happy', 'sad', 'angry', 'neutral', 'excited', 'calm', 'frustrated']
+            predicted_emotion = random.choice(emotions)  # Replace with actual model prediction
+            
+            self.current_emotion = predicted_emotion
+            self.emotion_history.append((datetime.datetime.now(), predicted_emotion))
+            
+            return predicted_emotion
+        except Exception as e:
+            print(f"Error detecting emotion: {e}")
+            return "neutral"
+    
+    def detect_language(self, text: str) -> str:
+        """Detect the language of the input text"""
+        try:
+            lang_code = detect(text)
+            if lang_code in self.supported_languages:
+                self.current_language = lang_code
+                return self.supported_languages[lang_code]
+            return "English"  # Default to English if unsupported language
+        except Exception as e:
+            print(f"Error detecting language: {e}")
+            return "English"
+    
+    def create_voice_profile(self, user_name: str, audio_data: np.ndarray) -> bool:
+        """Create a voice profile for user authentication"""
+        try:
+            # Extract voice characteristics
+            mfccs = librosa.feature.mfcc(y=audio_data, sr=16000, n_mfcc=13)
+            spectral_center = librosa.feature.spectral_centroid(y=audio_data, sr=16000)
+            
+            # Create a unique hash of the voice characteristics
+            voice_hash = hashlib.sha256(str(mfccs.tobytes() + spectral_center.tobytes()).encode()).hexdigest()
+            
+            # Store the voice profile
+            self.voice_profiles[user_name] = {
+                'voice_hash': voice_hash,
+                'created_at': datetime.datetime.now().isoformat(),
+                'last_used': datetime.datetime.now().isoformat()
+            }
+            
+            return True
+        except Exception as e:
+            print(f"Error creating voice profile: {e}")
+            return False
+    
+    def authenticate_user(self, audio_data: np.ndarray) -> bool:
+        """Authenticate user using voice biometrics"""
+        try:
+            if not self.voice_profiles:
+                return False
+            
+            # Extract voice characteristics
+            mfccs = librosa.feature.mfcc(y=audio_data, sr=16000, n_mfcc=13)
+            spectral_center = librosa.feature.spectral_centroid(y=audio_data, sr=16000)
+            
+            # Create hash of current voice characteristics
+            current_hash = hashlib.sha256(str(mfccs.tobytes() + spectral_center.tobytes()).encode()).hexdigest()
+            
+            # Compare with stored profiles
+            for user_name, profile in self.voice_profiles.items():
+                if self._compare_voice_hashes(current_hash, profile['voice_hash']):
+                    self.current_user = user_name
+                    profile['last_used'] = datetime.datetime.now().isoformat()
+                    return True
+            
+            return False
+        except Exception as e:
+            print(f"Error authenticating user: {e}")
+            return False
+    
+    def _compare_voice_hashes(self, hash1: str, hash2: str) -> bool:
+        """Compare two voice hashes with some tolerance for variation"""
+        # This is a simplified comparison - you would need a more sophisticated algorithm
+        # for real voice biometric comparison
+        return hash1 == hash2
+    
+    def detect_voice_activity(self, audio_data: np.ndarray) -> bool:
+        """Detect if there is voice activity in the audio data"""
+        try:
+            # Calculate RMS energy
+            rms = np.sqrt(np.mean(audio_data**2))
+            
+            # Check if energy is above threshold
+            if rms > self.vad_threshold:
+                self.last_speech_time = datetime.datetime.now()
+                return True
+            
+            # Check if we've been silent for too long
+            if self.last_speech_time:
+                silence_duration = (datetime.datetime.now() - self.last_speech_time).total_seconds()
+                if silence_duration > self.silence_duration:
+                    return False
+            
+            return False
+        except Exception as e:
+            print(f"Error detecting voice activity: {e}")
+            return False
+    
+    def enhance_speech(self, text: str) -> str:
+        """Enhance speech with natural intonation and emphasis"""
+        try:
+            # Add emphasis to important words
+            words = text.split()
+            enhanced_words = []
+            
+            for word in words:
+                # Add emphasis to words in all caps or with special characters
+                if word.isupper() or any(c in word for c in '!?*'):
+                    enhanced_words.append(f"<emphasis level='strong'>{word}</emphasis>")
+                else:
+                    enhanced_words.append(word)
+            
+            # Add natural pauses
+            enhanced_text = ' '.join(enhanced_words)
+            pause_duration = int(self.voice_settings['pause_duration'] * 1000)
+            pause_duration_long = int(self.voice_settings['pause_duration'] * 1.5 * 1000)
+            
+            enhanced_text = enhanced_text.replace('.', f'.<break time="{pause_duration}ms"/>')
+            enhanced_text = enhanced_text.replace('!', f'!<break time="{pause_duration_long}ms"/>')
+            enhanced_text = enhanced_text.replace('?', f'?<break time="{pause_duration_long}ms"/>')
+            
+            return enhanced_text
+        except Exception as e:
+            print(f"Error enhancing speech: {e}")
+            return text
+
 # Example usage
 if __name__ == "__main__":
-    # Only run the CLI version if script is run directly
     try:
+        # Replace with your actual Gemini API key
         API_KEY = "AIzaSyADsfm9r5e6Ok18pFXiUmXzOX1_BLuQzPs"
-        jarvis = JarvisAssistant(API_KEY, web_mode=False)
+        
+        # Create and run Jarvis
+        jarvis = JarvisAssistant(API_KEY)
         jarvis.run()
     except KeyboardInterrupt:
         print("\nJarvis shutting down...")
