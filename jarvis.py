@@ -25,9 +25,13 @@ import wave
 import hashlib
 import base64
 from typing import Dict, List, Optional, Tuple
+from ui_manager import JarvisUI
 
 class JarvisAssistant:
     def __init__(self, api_key, user_name="Yaduraj"):
+        # Initialize UI manager
+        self.ui = JarvisUI()
+        
         # User information
         self.user_name = user_name
         self.user_title = "sir"  # Iron Man style addressing
@@ -223,20 +227,8 @@ class JarvisAssistant:
         self.system_boot()
         
     def system_boot(self):
-        """Simulate Jarvis boot sequence"""
-        print("=" * 50)
-        print("J.A.R.V.I.S - Just A Rather Very Intelligent System")
-        print("=" * 50)
-        print("Initializing systems...")
-        time.sleep(0.5)
-        print("Voice recognition: Online")
-        time.sleep(0.3)
-        print("Natural language processing: Online")
-        time.sleep(0.3)
-        print("AI core: Online")
-        time.sleep(0.3)
-        print("All systems operational")
-        print("=" * 50)
+        """Simulate Jarvis boot sequence with enhanced UI"""
+        self.ui.show_boot_sequence()
         
         current_time = datetime.datetime.now().strftime("%H:%M")
         greeting = self.get_greeting_by_time()
@@ -254,10 +246,13 @@ class JarvisAssistant:
             return "Good evening"
     
     def speak(self, text, print_output=True):
-        """Convert text to speech with enhanced features"""
+        """Convert text to speech with enhanced UI feedback"""
         try:
             # Enhance speech with natural intonation and emphasis
             enhanced_text = self.enhance_speech(text)
+            
+            if print_output:
+                self.ui.display_speech(text)
             
             # Add short pauses for more natural speech using commas and periods
             enhanced_text = enhanced_text.replace(',', ', ')
@@ -309,68 +304,106 @@ class JarvisAssistant:
                 print(f"JARVIS: {text}")  # Fallback to text output
     
     def listen(self, timeout=5, interrupt_mode=False):
-        """Listen for voice commands with enhanced features"""
-        with sr.Microphone() as source:
-            if not interrupt_mode:
-                print("Listening...")
-            
-            # Reduce the duration of ambient noise adjustment
-            self.recognizer.adjust_for_ambient_noise(source, duration=0.2)
-            try:
-                # Record audio with voice activity detection
-                audio = self.recognizer.listen(source, timeout=3, phrase_time_limit=10)
+        """Listen for voice commands with enhanced UI feedback"""
+        listening_animation = None
+        processing_animation = None
+        
+        try:
+            with sr.Microphone() as source:
+                if not interrupt_mode:
+                    try:
+                        # Start listening animation
+                        print("🎤 Listening...")
+                        listening_animation = self.ui.show_listening_animation()
+                        next(listening_animation)
+                    except Exception as e:
+                        print(f"Animation error (non-critical): {e}")
+                
+                # Adjust for ambient noise more frequently but quickly
+                self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                
+                # Record audio with more generous timeouts
+                audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=15)
                 
                 # Convert audio to numpy array for processing
                 audio_data = np.frombuffer(audio.get_raw_data(), dtype=np.int16).astype(np.float32)
                 
+                if not interrupt_mode:
+                    try:
+                        # Stop listening animation and start processing animation
+                        if listening_animation:
+                            listening_animation.close()
+                            listening_animation = None
+                        
+                        processing_animation = self.ui.show_processing_animation("Processing speech")
+                        next(processing_animation)
+                    except Exception as e:
+                        print(f"Animation error (non-critical): {e}")
+                
+                # Check audio level
+                audio_level = np.abs(audio_data).mean()
+                if audio_level < 100:  # Adjust this threshold based on testing
+                    if not interrupt_mode:
+                        self.ui.display_error("Audio level too low. Please speak louder or check your microphone.")
+                    return ""
+                
                 # Detect voice activity
                 if not self.detect_voice_activity(audio_data):
                     if not interrupt_mode:
-                        print("No voice activity detected")
+                        self.ui.display_error("No voice detected. Please try speaking again.")
                     return ""
                 
-                # Authenticate user if required
-                if self.auth_required and not self.authenticate_user(audio_data):
-                    self.speak("I'm sorry, but I couldn't verify your voice. Please try again.")
+                # Try multiple speech recognition attempts
+                text = None
+                errors = []
+                
+                # Try with different language settings if the first attempt fails
+                for lang in [self.current_language, 'en']:
+                    try:
+                        text = self.recognizer.recognize_google(audio, language=lang)
+                        if text:
+                            break
+                    except sr.UnknownValueError:
+                        errors.append(f"Could not understand audio (tried {lang})")
+                    except sr.RequestError as e:
+                        errors.append(f"Google Speech Recognition error: {str(e)}")
+                    except Exception as e:
+                        errors.append(f"Recognition error: {str(e)}")
+                
+                if not text:
+                    if not interrupt_mode:
+                        self.ui.display_error("\n".join(errors))
                     return ""
                 
-                # Detect emotion
-                emotion = self.detect_emotion(audio_data)
-                if emotion != "neutral":
-                    print(f"Detected emotion: {emotion}")
-                
-                if not interrupt_mode:
-                    print("Processing speech...")
-                
-                # Use recognize_google with language detection
-                text = self.recognizer.recognize_google(audio, language=self.current_language)
-                
-                # Analyze speaking pace and adjust Jarvis's speech rate
-                if len(text.split()) > 3:  # Only analyze if there are enough words
+                # Process the recognized text
+                if len(text.split()) > 3:  # Only analyze pace for longer phrases
                     self.analyze_speaking_pace(audio_data, text)
                 
-                # Detect language if not already set
-                detected_lang = self.detect_language(text)
-                if detected_lang != self.supported_languages[self.current_language]:
-                    print(f"Detected language: {detected_lang}")
-                
                 if not interrupt_mode:
-                    print(f"You said: {text}")
+                    self.ui.display_speech(text, user=True)
+                
                 return text.lower()
                 
-            except sr.UnknownValueError:
-                if not interrupt_mode:
-                    print("Could not understand audio")
-                return ""
-            except sr.RequestError as e:
-                if not interrupt_mode:
-                    print(f"Google Speech Recognition service error: {e}")
-                    self.speak("I'm afraid I'm having trouble connecting to the voice recognition servers, sir.")
-                return ""
-            except Exception as e:
-                if not interrupt_mode:
-                    print(f"Error in speech recognition: {e}")
-                return ""
+        except sr.WaitTimeoutError:
+            if not interrupt_mode:
+                self.ui.display_error("Listening timed out. Please try again.")
+            return ""
+            
+        except Exception as e:
+            if not interrupt_mode:
+                self.ui.display_error(f"Error during voice recognition: {str(e)}\nPlease check your microphone settings.")
+            print(f"Voice recognition error: {e}")
+            return ""
+            
+        finally:
+            # Clean up any remaining animations
+            try:
+                if listening_animation:
+                    listening_animation.close()
+                if processing_animation:
+                    processing_animation.close()
+            except:
+                pass
     
     def background_listener(self):
         """Background thread to listen for interruptions while speaking"""
@@ -570,13 +603,26 @@ class JarvisAssistant:
             return f"I encountered an issue while searching Wikipedia, {self.user_title}. Perhaps try a different query?"
     
     def system_info(self):
-        """Get system information"""
+        """Get system information with enhanced UI display"""
         try:
-            system = platform.system()
-            processor = platform.processor()
-            version = platform.version()
+            cpu_usage = psutil.cpu_percent(interval=1)
+            memory = psutil.virtual_memory()
+            memory_info = {
+                'total': memory.total / (1024**3),
+                'used': memory.used / (1024**3),
+                'percent': memory.percent
+            }
             
-            return f"You're currently running {system} {version} on a {processor} processor, {self.user_title}."
+            hostname = socket.gethostname()
+            ip = socket.gethostbyname(hostname)
+            
+            self.ui.display_system_info(cpu_usage, memory_info, ip)
+            
+            response = f"I've displayed your system information, {self.user_title}."
+            if cpu_usage > 80:
+                response += " Your CPU usage is quite high. Would you like me to investigate the cause?"
+            
+            return response
         except:
             return f"I encountered an issue while accessing your system information, {self.user_title}."
     
@@ -660,24 +706,13 @@ class JarvisAssistant:
             return f"What would you like me to note down, {self.user_title}?"
     
     def read_notes(self):
-        """Read back saved notes"""
+        """Read back saved notes with enhanced UI display"""
         if not self.notes:
             return f"You don't have any notes saved, {self.user_title}. Would you like to create one?"
         
-        if len(self.notes) == 1:
-            note = self.notes[0]
-            return f"You have one note from {note['timestamp']}: {note['content']}"
+        self.ui.display_notes(self.notes)
         
-        # If multiple notes, read the most recent few
-        recent_notes = self.notes[-3:]  # Last 3 notes
-        notes_text = ""
-        for i, note in enumerate(recent_notes, 1):
-            notes_text += f"Note {i} from {note['timestamp']}: {note['content']}. "
-        
-        if len(self.notes) > 3:
-            notes_text += f"You have {len(self.notes) - 3} more notes. Would you like me to read those as well?"
-            
-        return notes_text
+        return f"I've displayed your notes, {self.user_title}. Would you like me to read any of them aloud?"
     
     def define_protocol(self, query):
         """Define a custom protocol - series of commands to run in sequence"""
@@ -910,7 +945,7 @@ class JarvisAssistant:
         return f"Screenshot functionality requires system-specific implementation, {self.user_title}. Would you like me to help you set up this integration?"
     
     def get_news(self, query=""):
-        """Get the latest news with optional category filtering and enhanced Jarvis-style delivery"""
+        """Get the latest news with enhanced UI display"""
         try:
             # Extract category if specified
             category_match = re.search(r"news (?:about|on|for|in)?\s+(.+)", query, re.IGNORECASE)
@@ -965,76 +1000,13 @@ class JarvisAssistant:
                 else:
                     return f"I couldn't find any recent news, {self.user_title}. Perhaps try again later."
             
-            # Prepare news data for Gemini processing
-            news_items = []
-            for i, article in enumerate(articles, 1):
-                source = article.get("source", {}).get("name", "Unknown source")
-                title = article.get("title", "No title available").split(" - ")[0]  # Clean up title
-                description = article.get("description", "No description available")
-                
-                news_items.append({
-                    "number": i,
-                    "source": source,
-                    "title": title,
-                    "description": description
-                })
-            
-            # Create prompt for Gemini to process the news in Jarvis style
-            prompt = f"""
-            As J.A.R.V.I.S., present a sophisticated news briefing. Consider the following context:
-            - Time since boot: {(datetime.datetime.now() - self.last_query_time).total_seconds() if self.last_query_time else 0} seconds
-            - Last topic discussed: {self.last_topic}
-            - Previous interaction count: {len(self.conversation_history)}
-
-            Format Guidelines:
-            1. If this is the first interaction after boot, use a formal greeting
-            2. If we've spoken recently (within 5 minutes), skip greetings and be more direct
-            3. If significant time has passed (over 30 minutes), acknowledge the return
-            4. For news items:
-                - Present headlines clearly and concisely
-                - Add relevant technical or historical context
-                - Maintain conversational flow between items
-                - Use transitional phrases between topics
-                - End with a natural closing that invites follow-up
-
-            News items to present:
-            {json.dumps(news_items, indent=2)}
-
-            Style Requirements:
-            1. Use sophisticated British English
-            2. Be natural and conversational, not robotic
-            3. Show personality through subtle wit and insight
-            4. Adapt formality based on interaction history
-            5. Use proper pacing and transitions
-            6. Format for clear verbal delivery
-
-            Remember: You are J.A.R.V.I.S., a highly sophisticated AI. Your responses should feel natural and contextually appropriate.
-            """
-
-            # Get enhanced response from Gemini
-            generation_config = {
-                "max_output_tokens": 500,
-                "temperature": 0.7
-            }
-
-            response = self.model.generate_content(
-                prompt,
-                generation_config=generation_config
-            )
-
-            # Clean up and format the response
-            news_briefing = response.text.strip()
-            
-            # Add a context-aware closing
-            if not self.conversation_history:
-                news_briefing += f"\n\nShall I elaborate on any of these items, {self.user_title}?"
-            else:
-                news_briefing += f"\n\nWould you like me to provide more details about any particular item?"
+            # Display news in formatted table
+            self.ui.display_news(articles)
             
             # Store articles for later reference
             self.recent_news_articles = articles
             
-            return news_briefing
+            return f"I've found {len(articles)} relevant news articles, {self.user_title}. Would you like me to read any of them in detail?"
             
         except Exception as e:
             print(f"Error fetching news: {e}")
@@ -1064,8 +1036,6 @@ class JarvisAssistant:
                         return f"I'm sorry, but the URL for article {article_num} is not available, {self.user_title}."
                 else:
                     return f"Please specify a valid article number between 1 and {len(self.recent_news_articles)}, {self.user_title}."
-            else:
-                return f"Please specify which article number you'd like to open, {self.user_title}. For example, 'open article 2'."
                 
         except Exception as e:
             print(f"Error opening news article: {e}")
@@ -1254,26 +1224,18 @@ class JarvisAssistant:
             print(f"Error loading data: {e}")
     
     def run(self):
-        """Main loop for Jarvis assistant"""
+        """Main loop for Jarvis assistant with enhanced UI"""
         self.speak(random.choice(self.acknowledgments))
         
         # Main loop flag
         self.active = True
         
-        # Print instructions for text input fallback
-        print("\n" + "="*50)
-        print("JARVIS VOICE ASSISTANT")
-        print("="*50)
-        print("Voice commands: Speak clearly after 'Listening...'")
-        print("Text input: Type your command when prompted")
-        print("Exit: Say 'exit' or 'goodbye' or type '!exit'")
-        print("Note: No wake word required - just speak your command directly")
-        print("="*50 + "\n")
+        # Show help guide
+        self.ui.display_help()
         
         while self.active:
             try:
                 # First try voice input
-                print("Listening... (or type a command)")
                 command = self.listen()
                 
                 # Check for text input fallback
@@ -1293,8 +1255,20 @@ class JarvisAssistant:
                     listener_thread = threading.Thread(target=self.background_listener, daemon=True)
                     listener_thread.start()
                     
-                    # Process the command
-                    self.process_command(command)
+                    # Start processing animation
+                    processing_animation = self.ui.show_processing_animation("Processing command")
+                    try:
+                        next(processing_animation)  # Start the animation
+                        
+                        # Process the command
+                        self.process_command(command)
+                        
+                    finally:
+                        # Stop the animation by closing the generator
+                        try:
+                            processing_animation.close()
+                        except:
+                            pass
                     
                     # Wait for background listener to finish
                     listener_thread.join(timeout=0.5)
@@ -1305,7 +1279,7 @@ class JarvisAssistant:
                     # Small delay when no command is detected to prevent CPU overuse
                     time.sleep(0.1)
             except Exception as e:
-                print(f"Error in main loop: {e}")
+                self.ui.display_error(f"Error in main loop: {e}")
                 # Continue the loop even if there's an error
                 time.sleep(0.5)
                 continue
@@ -1313,354 +1287,47 @@ class JarvisAssistant:
     def check_microphone(self):
         """Check if microphone is working properly"""
         try:
-            print("Checking microphone...")
+            print("\nChecking microphone configuration...")
+            
+            # List all available microphones
             microphones = sr.Microphone.list_microphone_names()
-            print(f"Available microphones: {microphones}")
+            if not microphones:
+                print("❌ No microphones found! Please check your microphone connection.")
+                return False
+            
+            print(f"📝 Available microphones:")
+            for idx, mic in enumerate(microphones):
+                print(f"  {idx}: {mic}")
             
             # Try to use the default microphone
             with sr.Microphone() as source:
-                print(f"Using microphone: {source.device_index}")
-                print("Adjusting for ambient noise... Please be quiet for a moment")
-                self.recognizer.adjust_for_ambient_noise(source, duration=1)
-                print(f"Energy threshold set to {self.recognizer.energy_threshold}")
-                print("Microphone check complete")
+                print(f"\n🎤 Using microphone: {microphones[source.device_index]}")
+                print("📊 Calibrating for ambient noise... Please stay quiet for a moment")
+                
+                # Adjust recognition settings for better accuracy
+                self.recognizer.energy_threshold = 300  # Initial threshold
+                self.recognizer.dynamic_energy_threshold = True  # Enable dynamic adjustment
+                self.recognizer.dynamic_energy_adjustment_damping = 0.15  # More responsive adjustment
+                self.recognizer.dynamic_energy_ratio = 1.5  # More sensitive
+                self.recognizer.pause_threshold = 0.8  # Longer pause for end of phrase
+                
+                # Perform ambient noise adjustment
+                self.recognizer.adjust_for_ambient_noise(source, duration=2)
+                
+                print(f"✅ Microphone configured successfully:")
+                print(f"  - Energy threshold: {self.recognizer.energy_threshold}")
+                print(f"  - Pause threshold: {self.recognizer.pause_threshold}")
+                print("  - Dynamic adjustment: Enabled")
                 return True
+            
         except Exception as e:
-            print(f"Error checking microphone: {e}")
-            print("Speech recognition may not work properly")
+            print(f"❌ Error configuring microphone: {str(e)}")
+            print("Troubleshooting tips:")
+            print("1. Check if your microphone is properly connected")
+            print("2. Try unplugging and replugging your microphone")
+            print("3. Check Windows sound settings and ensure the correct microphone is set as default")
+            print("4. Check microphone permissions for your application")
             return False
-
-    def create_workflow(self, steps):
-        """Create and manage complex automated workflows with advanced voice interaction"""
-        try:
-            # Parse workflow steps and conditions
-            workflow = {
-                'name': '',
-                'steps': [],
-                'conditions': {},
-                'schedule': None,
-                'voice_triggers': [],
-                'last_run': None,
-                'status': 'active',
-                'error_handling': {
-                    'retry_count': 3,
-                    'fallback_actions': {},
-                    'notifications': True
-                }
-            }
-            
-            # Voice interaction for workflow creation
-            self.speak("I'll help you create a new workflow. What shall we name it?")
-            workflow_name = self.listen() or "New Workflow"
-            workflow['name'] = workflow_name.lower().replace(" ", "_")
-            
-            # Get workflow steps through conversation
-            self.speak("Please list the steps for this workflow. I'll confirm each one.")
-            while True:
-                self.speak("What's the next step? Say 'done' when finished.")
-                step = self.listen()
-                
-                if not step or step.lower() == 'done':
-                    break
-                
-                # Parse step for conditions
-                if 'if' in step.lower():
-                    condition = self._parse_condition(step)
-                    workflow['conditions'][len(workflow['steps'])] = condition
-                
-                # Add step with metadata
-                workflow['steps'].append({
-                    'command': step,
-                    'type': self._determine_step_type(step),
-                    'requires_confirmation': False,
-                    'timeout': 30,
-                    'retry_on_fail': True
-                })
-                
-                self.speak(f"Added step: {step}. Would you like to add any specific conditions for this step?")
-                conditions = self.listen()
-                if conditions and 'yes' in conditions.lower():
-                    self._add_step_conditions(workflow['steps'][-1])
-            
-            # Schedule setup
-            self.speak("Would you like to schedule this workflow?")
-            schedule_response = self.listen()
-            if schedule_response and 'yes' in schedule_response.lower():
-                workflow['schedule'] = self._setup_schedule()
-            
-            # Voice trigger setup
-            self.speak("Would you like to set up voice triggers for this workflow?")
-            trigger_response = self.listen()
-            if trigger_response and 'yes' in trigger_response.lower():
-                workflow['voice_triggers'] = self._setup_voice_triggers()
-            
-            # Save workflow
-            self.workflows[workflow['name']] = workflow
-            self.save_data()
-            
-            response = f"Workflow '{workflow_name}' has been created with {len(workflow['steps'])} steps."
-            if workflow['schedule']:
-                response += f" It will run {workflow['schedule']['description']}."
-            if workflow['voice_triggers']:
-                triggers = ", ".join(workflow['voice_triggers'])
-                response += f" Voice triggers set: {triggers}."
-            
-            return response
-            
-        except Exception as e:
-            print(f"Error creating workflow: {e}")
-            return f"I encountered an issue while creating the workflow, {self.user_title}. Would you like to try again?"
-    
-    def _parse_condition(self, step):
-        """Parse conditional statements in workflow steps"""
-        condition = {
-            'type': 'simple',
-            'check': None,
-            'value': None,
-            'operator': '==',
-            'action_if_true': None,
-            'action_if_false': None
-        }
-        
-        # Extract condition parts
-        if 'if' in step.lower():
-            parts = step.lower().split('if')[1].split('then')
-            if len(parts) >= 2:
-                condition_str = parts[0].strip()
-                action = parts[1].strip()
-                
-                # Parse condition
-                if '=' in condition_str:
-                    condition['operator'] = '=='
-                    check, value = condition_str.split('=')
-                elif '>' in condition_str:
-                    condition['operator'] = '>'
-                    check, value = condition_str.split('>')
-                elif '<' in condition_str:
-                    condition['operator'] = '<'
-                    check, value = condition_str.split('<')
-                
-                condition['check'] = check.strip()
-                condition['value'] = value.strip()
-                condition['action_if_true'] = action
-                
-                # Check for else clause
-                if 'else' in step.lower():
-                    else_action = step.lower().split('else')[1].strip()
-                    condition['action_if_false'] = else_action
-        
-        return condition
-    
-    def _determine_step_type(self, step):
-        """Determine the type of workflow step for appropriate handling"""
-        step_lower = step.lower()
-        
-        if any(cmd in step_lower for cmd in ['remind', 'schedule', 'alarm']):
-            return 'time_based'
-        elif any(cmd in step_lower for cmd in ['if', 'check', 'compare']):
-            return 'conditional'
-        elif any(cmd in step_lower for cmd in ['wait', 'pause', 'delay']):
-            return 'delay'
-        elif any(cmd in step_lower for cmd in ['repeat', 'loop', 'while']):
-            return 'loop'
-        else:
-            return 'command'
-    
-    def _add_step_conditions(self, step):
-        """Add conditions to a workflow step through voice interaction"""
-        self.speak("What conditions would you like to add? You can specify timing, dependencies, or required states.")
-        conditions = self.listen()
-        
-        if conditions:
-            step['conditions'] = {
-                'timing': self._parse_timing_conditions(conditions),
-                'dependencies': self._parse_dependencies(conditions),
-                'required_states': self._parse_required_states(conditions)
-            }
-    
-    def _setup_schedule(self):
-        """Set up workflow schedule through voice interaction"""
-        schedule = {
-            'type': 'once',  # once, daily, weekly, monthly
-            'time': None,
-            'days': [],
-            'description': ''
-        }
-        
-        self.speak("How often should this workflow run? You can say 'once', 'daily', 'weekly', or 'monthly'.")
-        schedule_type = self.listen()
-        
-        if schedule_type:
-            schedule['type'] = schedule_type.lower()
-            
-            if schedule['type'] == 'once':
-                self.speak("When should this run? You can specify a date and time.")
-                schedule['time'] = self._parse_datetime(self.listen())
-                schedule['description'] = f"once at {schedule['time']}"
-            
-            elif schedule['type'] in ['daily', 'weekly', 'monthly']:
-                self.speak("At what time should this run?")
-                schedule['time'] = self._parse_time(self.listen())
-                
-                if schedule['type'] in ['weekly', 'monthly']:
-                    self.speak("On which days should this run?")
-                    schedule['days'] = self._parse_days(self.listen())
-                
-                schedule['description'] = f"{schedule['type']} at {schedule['time']}"
-                if schedule['days']:
-                    schedule['description'] += f" on {', '.join(schedule['days'])}"
-        
-        return schedule
-    
-    def _setup_voice_triggers(self):
-        """Set up voice triggers for workflow activation"""
-        triggers = []
-        
-        self.speak("Please specify voice commands that should trigger this workflow. Say 'done' when finished.")
-        while True:
-            trigger = self.listen()
-            if not trigger or trigger.lower() == 'done':
-                break
-            
-            triggers.append(trigger.lower())
-            self.speak(f"Added trigger: {trigger}. Any more triggers?")
-        
-        return triggers
-    
-    def _parse_datetime(self, datetime_str):
-        """Parse date and time from natural language input"""
-        try:
-            # Use dateutil.parser or similar for more sophisticated parsing
-            # For now, using a simple implementation
-            return datetime.datetime.strptime(datetime_str, "%Y-%m-%d %H:%M")
-        except:
-            return None
-    
-    def _parse_time(self, time_str):
-        """Parse time from natural language input"""
-        try:
-            # Add natural language time parsing
-            # For now, using a simple implementation
-            return datetime.datetime.strptime(time_str, "%H:%M").time()
-        except:
-            return None
-    
-    def _parse_days(self, days_str):
-        """Parse days from natural language input"""
-        days = []
-        day_mapping = {
-            'monday': 0, 'tuesday': 1, 'wednesday': 2, 'thursday': 3,
-            'friday': 4, 'saturday': 5, 'sunday': 6
-        }
-        
-        for day in days_str.lower().split():
-            if day in day_mapping:
-                days.append(day)
-        
-        return days
-    
-    def execute_workflow(self, workflow_name):
-        """Execute a saved workflow with error handling and recovery"""
-        try:
-            workflow = self.workflows.get(workflow_name.lower().replace(" ", "_"))
-            if not workflow:
-                return f"I couldn't find a workflow named '{workflow_name}', {self.user_title}."
-            
-            self.speak(f"Executing workflow: {workflow_name}")
-            
-            # Track execution state
-            execution_state = {
-                'current_step': 0,
-                'retries': {},
-                'results': {},
-                'start_time': datetime.datetime.now()
-            }
-            
-            # Execute each step
-            for i, step in enumerate(workflow['steps']):
-                execution_state['current_step'] = i
-                
-                # Check conditions
-                if i in workflow['conditions']:
-                    if not self._evaluate_condition(workflow['conditions'][i]):
-                        continue
-                
-                # Execute step with retry logic
-                success = False
-                retries = 0
-                while not success and retries < workflow['error_handling']['retry_count']:
-                    try:
-                        result = self._execute_step(step)
-                        execution_state['results'][i] = result
-                        success = True
-                    except Exception as e:
-                        retries += 1
-                        execution_state['retries'][i] = retries
-                        if retries >= workflow['error_handling']['retry_count']:
-                            if i in workflow['error_handling']['fallback_actions']:
-                                self._execute_step(workflow['error_handling']['fallback_actions'][i])
-                            raise Exception(f"Step {i} failed after {retries} retries: {e}")
-                        time.sleep(1)  # Wait before retry
-                
-                # Optional step confirmation
-                if step['requires_confirmation']:
-                    self.speak(f"Step {i+1} completed. Should I continue?")
-                    if not self._get_confirmation():
-                        break
-            
-            # Update workflow status
-            workflow['last_run'] = datetime.datetime.now().isoformat()
-            self.save_data()
-            
-            return f"Workflow '{workflow_name}' completed successfully."
-            
-        except Exception as e:
-            print(f"Error executing workflow: {e}")
-            return f"I encountered an issue while executing the workflow, {self.user_title}. Would you like to see the error details?"
-    
-    def _evaluate_condition(self, condition):
-        """Evaluate a workflow condition"""
-        try:
-            if condition['type'] == 'simple':
-                value = self._get_condition_value(condition['check'])
-                if condition['operator'] == '==':
-                    return value == condition['value']
-                elif condition['operator'] == '>':
-                    return value > float(condition['value'])
-                elif condition['operator'] == '<':
-                    return value < float(condition['value'])
-            return True
-        except:
-            return False
-    
-    def _get_condition_value(self, check):
-        """Get value for condition checking"""
-        # Add more sophisticated value retrieval
-        if check == 'time':
-            return datetime.datetime.now().time()
-        elif check == 'day':
-            return datetime.datetime.now().strftime('%A').lower()
-        return None
-    
-    def _execute_step(self, step):
-        """Execute a single workflow step"""
-        if step['type'] == 'command':
-            return self.process_command(step['command'])
-        elif step['type'] == 'time_based':
-            # Handle time-based steps
-            pass
-        elif step['type'] == 'delay':
-            time.sleep(self._parse_delay(step['command']))
-        elif step['type'] == 'loop':
-            # Handle loop steps
-            pass
-        return True
-    
-    def _get_confirmation(self):
-        """Get user confirmation through voice"""
-        self.speak("Please confirm: yes or no")
-        response = self.listen()
-        return response and 'yes' in response.lower()
 
     def analyze_speaking_pace(self, audio_data: np.ndarray, text: str) -> float:
         """Analyze user's speaking pace and return words per minute"""
@@ -1735,7 +1402,7 @@ class JarvisAssistant:
             if lang_code in self.supported_languages:
                 self.current_language = lang_code
                 return self.supported_languages[lang_code]
-            return "English"  # Default to English if unsupported language
+            return "English"  
         except Exception as e:
             print(f"Error detecting language: {e}")
             return "English"
