@@ -313,58 +313,66 @@ class JarvisAssistant:
                 print("Using cached response")
                 return self.response_cache[cache_key]
             
-            # Only show processing message occasionally to speed up interaction
-            if random.random() > 0.9:
-                self.speak(random.choice(self.processing_phrases), print_output=False)
+            # Calculate time since last interaction
+            time_since_last = None
+            if self.last_query_time:
+                time_since_last = (datetime.datetime.now() - self.last_query_time).total_seconds()
             
-            # Build context from conversation history - limit to last 3 for faster processing
+            # Build context from conversation history
             context = "\n".join([f"User: {q}\nJarvis: {r}" for q, r in self.conversation_history[-3:]])
             
-            # Create a more concise prompt for faster processing
+            # Create a context-aware prompt
             prompt = f"""
-            You are J.A.R.V.I.S. (Just A Rather Very Intelligent System), the AI assistant created by Tony Stark and serving {self.user_name}.
+            You are J.A.R.V.I.S., a sophisticated AI assistant. Consider the following context:
             
-            Instructions:
-            - Respond like J.A.R.V.I.S. from Iron Man movies
-            - Use formal, British butler-like tone with wit
-            - Address user as "sir"
-            - Be concise and direct
-            - Use technical terms when appropriate
+            Current State:
+            - Time since last interaction: {time_since_last if time_since_last else 'First interaction'}
+            - Previous topic: {self.last_topic if self.last_topic else 'None'}
+            - Interaction count: {len(self.conversation_history)}
+            - Time of day: {datetime.datetime.now().strftime('%H:%M')}
             
-            Recent context:
+            Recent Conversation:
             {context}
             
             User query: {query}
             
-            Respond as J.A.R.V.I.S.:
+            Response Guidelines:
+            1. If this is the first interaction since boot, be formal and proper
+            2. If we've spoken recently (within 5 minutes), be more casual and direct
+            3. If returning after a long pause (>30 minutes), acknowledge the return subtly
+            4. Reference previous context when relevant
+            5. Show personality through measured wit and technical insight
+            6. Be natural and conversational, not repetitive or robotic
+            7. Avoid redundant greetings if we've spoken recently
+            
+            Respond naturally as J.A.R.V.I.S.:
             """
             
-            # Set a maximum output length and temperature for faster responses
+            # Set generation parameters
             generation_config = {
                 "max_output_tokens": 150,
                 "temperature": 0.7
             }
             
-            # Get response from Gemini with timeout
+            # Get response from Gemini
             response = self.model.generate_content(
                 prompt,
                 generation_config=generation_config
             )
             
-            # Remove any "JARVIS:" prefixes that might be in the response
+            # Clean up response
             cleaned_response = response.text.replace("JARVIS: ", "").strip()
             
-            # Add to conversation history
+            # Update conversation history
             self.conversation_history.append((query, cleaned_response))
-            
-            # Limit history length
-            if len(self.conversation_history) > 5:
+            if len(self.conversation_history) > self.context_window:
                 self.conversation_history.pop(0)
             
             # Cache the response
             self.cache_response(query, cleaned_response)
-                
+            
             return cleaned_response
+            
         except Exception as e:
             print(f"Error communicating with Gemini: {e}")
             return f"I seem to be experiencing a temporary systems malfunction, {self.user_title}. My apologies."
@@ -809,7 +817,7 @@ class JarvisAssistant:
         return f"Screenshot functionality requires system-specific implementation, {self.user_title}. Would you like me to help you set up this integration?"
     
     def get_news(self, query=""):
-        """Get the latest news with optional category filtering"""
+        """Get the latest news with optional category filtering and enhanced Jarvis-style delivery"""
         try:
             # Extract category if specified
             category_match = re.search(r"news (?:about|on|for|in)?\s+(.+)", query, re.IGNORECASE)
@@ -864,31 +872,76 @@ class JarvisAssistant:
                 else:
                     return f"I couldn't find any recent news, {self.user_title}. Perhaps try again later."
             
-            # Format the news briefing
-            if category:
-                news_intro = f"Here are the latest headlines in {category}, {self.user_title}:"
-            else:
-                news_intro = f"Here are today's top headlines, {self.user_title}:"
-            
+            # Prepare news data for Gemini processing
             news_items = []
             for i, article in enumerate(articles, 1):
                 source = article.get("source", {}).get("name", "Unknown source")
-                title = article.get("title", "No title available")
+                title = article.get("title", "No title available").split(" - ")[0]  # Clean up title
+                description = article.get("description", "No description available")
                 
-                # Clean up title (some APIs include source in title)
-                title = title.split(" - ")[0]
-                
-                news_items.append(f"{i}. From {source}: {title}")
+                news_items.append({
+                    "number": i,
+                    "source": source,
+                    "title": title,
+                    "description": description
+                })
             
-            news_text = news_intro + "\n\n" + "\n".join(news_items)
+            # Create prompt for Gemini to process the news in Jarvis style
+            prompt = f"""
+            As J.A.R.V.I.S., present a sophisticated news briefing. Consider the following context:
+            - Time since boot: {(datetime.datetime.now() - self.last_query_time).total_seconds() if self.last_query_time else 0} seconds
+            - Last topic discussed: {self.last_topic}
+            - Previous interaction count: {len(self.conversation_history)}
+
+            Format Guidelines:
+            1. If this is the first interaction after boot, use a formal greeting
+            2. If we've spoken recently (within 5 minutes), skip greetings and be more direct
+            3. If significant time has passed (over 30 minutes), acknowledge the return
+            4. For news items:
+                - Present headlines clearly and concisely
+                - Add relevant technical or historical context
+                - Maintain conversational flow between items
+                - Use transitional phrases between topics
+                - End with a natural closing that invites follow-up
+
+            News items to present:
+            {json.dumps(news_items, indent=2)}
+
+            Style Requirements:
+            1. Use sophisticated British English
+            2. Be natural and conversational, not robotic
+            3. Show personality through subtle wit and insight
+            4. Adapt formality based on interaction history
+            5. Use proper pacing and transitions
+            6. Format for clear verbal delivery
+
+            Remember: You are J.A.R.V.I.S., a highly sophisticated AI. Your responses should feel natural and contextually appropriate.
+            """
+
+            # Get enhanced response from Gemini
+            generation_config = {
+                "max_output_tokens": 500,
+                "temperature": 0.7
+            }
+
+            response = self.model.generate_content(
+                prompt,
+                generation_config=generation_config
+            )
+
+            # Clean up and format the response
+            news_briefing = response.text.strip()
             
-            # Add option to read full articles
-            news_text += f"\n\nWould you like me to open any of these articles in your browser, {self.user_title}?"
+            # Add a context-aware closing
+            if not self.conversation_history:
+                news_briefing += f"\n\nShall I elaborate on any of these items, {self.user_title}?"
+            else:
+                news_briefing += f"\n\nWould you like me to provide more details about any particular item?"
             
             # Store articles for later reference
             self.recent_news_articles = articles
             
-            return news_text
+            return news_briefing
             
         except Exception as e:
             print(f"Error fetching news: {e}")
