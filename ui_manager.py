@@ -2,7 +2,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.live import Live
 from rich.table import Table
-from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
+from rich.layout import Layout
 from rich.syntax import Syntax
 from rich import box
 from art import text2art
@@ -11,89 +12,169 @@ from tqdm import tqdm
 import time
 import sys
 import os
+import math
 
 class JarvisUI:
     def __init__(self):
         """Initialize the UI manager with Rich console and styling"""
         self.console = Console()
-        self.spinner_styles = ['dots', 'dots12', 'line', 'arrow3', 'bouncingBar', 'clock']
-        self.current_spinner = 0
+        self.current_animation = None
+        self.voice_activity_display = None
+        
+        # Voice visualization settings
+        self.viz_width = 50
+        self.viz_height = 3
+        self.viz_chars = "▁▂▃▄▅▆▇█"
+        
+        # Emotion colors
+        self.emotion_colors = {
+            'happy': 'green',
+            'sad': 'blue',
+            'angry': 'red',
+            'neutral': 'white',
+            'excited': 'yellow',
+            'calm': 'cyan',
+            'frustrated': 'magenta'
+        }
         
     def clear_screen(self):
         """Clear the terminal screen"""
         os.system('cls' if os.name == 'nt' else 'clear')
         
     def show_boot_sequence(self):
-        """Display an animated boot sequence"""
+        """Enhanced boot sequence with animations"""
+        # Clear screen first
         self.clear_screen()
         
         # Show JARVIS ASCII art
-        jarvis_art = text2art("J.A.R.V.I.S", font="block")
-        self.console.print(f"[bold blue]{jarvis_art}[/bold blue]")
+        jarvis_art = text2art("JARVIS", font='block')
+        self.console.print(Panel(jarvis_art, style="bold blue"))
         
-        # Initialize systems with progress bars
+        # Initialize system with progress bars
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
-            console=self.console,
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            console=self.console
         ) as progress:
-            
+            # Add multiple initialization tasks
             tasks = [
-                ("Initializing core systems...", 2),
-                ("Loading voice recognition modules...", 1.5),
-                ("Calibrating audio interfaces...", 1),
-                ("Establishing neural networks...", 2),
-                ("Loading language models...", 1.5),
-                ("Configuring security protocols...", 1),
-                ("Optimizing response algorithms...", 1.5)
+                ("Initializing core systems", 2),
+                ("Loading voice recognition", 1.5),
+                ("Calibrating audio processors", 1),
+                ("Establishing neural networks", 2),
+                ("Loading user preferences", 1),
+                ("Activating security protocols", 1.5),
+                ("Syncing with remote servers", 2)
             ]
             
+            progress_tasks = []
             for desc, duration in tasks:
-                task = progress.add_task(desc, total=None)
-                time.sleep(duration)
-                progress.remove_task(task)
-                
-        self.console.print("\n[bold green]All systems operational[/bold green]")
-        time.sleep(1)
-        
+                task = progress.add_task(desc, total=100)
+                progress_tasks.append((task, duration))
+            
+            # Simulate initialization
+            for _ in range(100):
+                for task, duration in progress_tasks:
+                    if not progress.finished:
+                        progress.update(task, advance=1)
+                        time.sleep(duration / 100)
+
     def show_listening_animation(self):
-        """Display an animated listening indicator"""
-        with Progress(
-            SpinnerColumn(spinner_name="dots12"),
-            TextColumn("[bold blue]Listening...[/bold blue]"),
-            console=self.console,
-            transient=True
-        ) as progress:
-            progress.add_task("", total=None)
-            while True:
-                yield
-                
-    def show_processing_animation(self, task="Processing"):
-        """Display an animated processing indicator"""
-        with Progress(
-            SpinnerColumn(spinner_name="line"),
-            TextColumn(f"[bold yellow]{task}...[/bold yellow]"),
-            console=self.console,
-            transient=True
-        ) as progress:
-            progress.add_task("", total=None)
-            while True:
-                yield
-                
-    def display_speech(self, text, user=False):
-        """Display speech in a stylized panel"""
-        style = "bold green" if user else "bold blue"
-        speaker = "You" if user else "JARVIS"
-        
-        panel = Panel(
-            text,
-            title=speaker,
-            title_align="left",
-            border_style=style,
-            box=box.ROUNDED
+        """Enhanced listening animation with voice activity visualization"""
+        layout = Layout()
+        layout.split_column(
+            Layout(name="status"),
+            Layout(name="visualization")
         )
-        self.console.print(panel)
         
+        with Live(layout, refresh_per_second=10) as live:
+            while True:
+                # Update status
+                layout["status"].update(Panel("🎤 Listening...", style="bold green"))
+                
+                # Update visualization
+                if hasattr(self, 'current_voice_level'):
+                    viz = self.create_voice_visualization(self.current_voice_level)
+                    layout["visualization"].update(Panel(viz, style="blue"))
+                
+                yield
+                time.sleep(0.1)
+
+    def create_voice_visualization(self, level):
+        """Create a real-time voice activity visualization"""
+        # Normalize level to 0-1
+        normalized_level = min(1.0, level / 0.5)
+        
+        # Create visualization bars
+        bars = []
+        for i in range(self.viz_width):
+            # Create a wave pattern
+            value = normalized_level * math.sin(time.time() * 10 + i * 0.2)
+            value = abs(value)  # Take absolute value for positive bars
+            
+            # Map value to visualization characters
+            char_index = int(value * (len(self.viz_chars) - 1))
+            bars.append(self.viz_chars[char_index])
+        
+        return '\n'.join([''.join(bars)] * self.viz_height)
+
+    def update_voice_activity(self, level):
+        """Update the voice activity visualization"""
+        self.current_voice_level = level
+
+    def update_emotion_display(self, emotion):
+        """Update the emotion display in real-time"""
+        color = self.emotion_colors.get(emotion, 'white')
+        emotion_text = f"😊 {emotion.capitalize()}" if emotion == 'happy' else \
+                      f"😢 {emotion.capitalize()}" if emotion == 'sad' else \
+                      f"😠 {emotion.capitalize()}" if emotion == 'angry' else \
+                      f"😐 {emotion.capitalize()}" if emotion == 'neutral' else \
+                      f"🎉 {emotion.capitalize()}" if emotion == 'excited' else \
+                      f"😌 {emotion.capitalize()}" if emotion == 'calm' else \
+                      f"😤 {emotion.capitalize()}"
+        
+        self.console.print(Panel(emotion_text, style=f"bold {color}"))
+
+    def show_processing_animation(self, message="Processing"):
+        """Show processing animation with message"""
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=self.console
+        ) as progress:
+            task = progress.add_task(message, total=None)
+            while True:
+                yield
+                time.sleep(0.1)
+
+    def display_speech(self, text, user=False):
+        """Display speech with enhanced styling"""
+        style = "bold yellow" if user else "bold blue"
+        prefix = "You:" if user else "JARVIS:"
+        
+        # Add emotion indicator if available
+        emotion_indicator = ""
+        if hasattr(self, 'current_emotion') and not user:
+            emotion = self.current_emotion
+            emotion_indicator = self.get_emotion_emoji(emotion) + " "
+        
+        self.console.print(Panel(f"{emotion_indicator}{text}", title=prefix, style=style))
+
+    def get_emotion_emoji(self, emotion):
+        """Get appropriate emoji for emotion"""
+        emotion_emojis = {
+            'happy': '😊',
+            'sad': '😢',
+            'angry': '😠',
+            'neutral': '😐',
+            'excited': '🎉',
+            'calm': '😌',
+            'frustrated': '😤'
+        }
+        return emotion_emojis.get(emotion, '')
+
     def display_system_info(self, cpu_usage, memory_info, ip_info):
         """Display system information in a formatted table"""
         table = Table(title="System Information", box=box.DOUBLE_EDGE)

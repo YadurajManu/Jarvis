@@ -26,6 +26,9 @@ import hashlib
 import base64
 from typing import Dict, List, Optional, Tuple
 from ui_manager import JarvisUI
+import noisereduce as nr
+from scipy import signal
+import queue
 
 class JarvisAssistant:
     def __init__(self, api_key, user_name="Yaduraj"):
@@ -99,14 +102,10 @@ class JarvisAssistant:
         # Initialize speech engine with optimized settings
         try:
             self.engine = pyttsx3.init()
-            
-            # Configure voice to sound more like movie Jarvis
             voices = self.engine.getProperty('voices')
-            self.engine.setProperty('voice', voices[0].id)  # Male voice
-            self.engine.setProperty('rate', 165)  # Slightly slower for the British butler feel
-            self.engine.setProperty('volume', 1.0)  # Full volume
-            
-            # Pre-warm the speech engine to reduce latency on first speak
+            self.engine.setProperty('voice', voices[0].id)
+            self.engine.setProperty('rate', 165)
+            self.engine.setProperty('volume', 1.0)
             self.engine.say("")
             self.engine.runAndWait()
             print("Speech engine initialized successfully")
@@ -116,9 +115,13 @@ class JarvisAssistant:
         
         # Initialize speech recognition with optimized settings
         self.recognizer = sr.Recognizer()
-        self.recognizer.energy_threshold = 300  # Adjust based on your microphone sensitivity
+        self.recognizer.energy_threshold = 4000  # Increased for better voice detection
         self.recognizer.dynamic_energy_threshold = True
-        self.recognizer.pause_threshold = 0.6  # Shorter pause threshold for faster response
+        self.recognizer.dynamic_energy_adjustment_damping = 0.15
+        self.recognizer.dynamic_energy_ratio = 1.5
+        self.recognizer.pause_threshold = 0.8  # Longer pause for end of phrase
+        self.recognizer.phrase_threshold = 0.3  # Shorter for faster response
+        self.recognizer.non_speaking_duration = 0.5  # Shorter for better phrase detection
         
         # Check microphone
         self.check_microphone()
@@ -226,6 +229,26 @@ class JarvisAssistant:
         # Initialization message
         self.system_boot()
         
+        # Enhanced voice processing settings
+        self.audio_queue = queue.Queue()
+        self.is_listening = False
+        self.noise_profile = None
+        self.voice_threshold = 0.02  # Adjusted threshold for better sensitivity
+        self.sample_rate = 16000
+        self.frame_duration = 0.03  # 30ms frames
+        self.silence_threshold = 0.7  # seconds of silence to end recording
+        
+        # Voice enhancement settings
+        self.voice_enhancement = {
+            'noise_reduction': True,
+            'automatic_gain': True,
+            'voice_normalization': True
+        }
+        
+        # Start continuous listening thread
+        self.listen_thread = threading.Thread(target=self._continuous_listen, daemon=True)
+        self.listen_thread.start()
+        
     def system_boot(self):
         """Simulate Jarvis boot sequence with enhanced UI"""
         self.ui.show_boot_sequence()
@@ -246,35 +269,19 @@ class JarvisAssistant:
             return "Good evening"
     
     def speak(self, text, print_output=True):
-        """Convert text to speech with enhanced UI feedback"""
+        """Convert text to speech with enhanced personality and natural flow"""
         try:
+            # Add personality markers based on emotion and context
+            text = self._add_personality_markers(text)
+            
             # Enhance speech with natural intonation and emphasis
             enhanced_text = self.enhance_speech(text)
             
             if print_output:
                 self.ui.display_speech(text)
             
-            # Add short pauses for more natural speech using commas and periods
-            enhanced_text = enhanced_text.replace(',', ', ')
-            enhanced_text = enhanced_text.replace('.', '. ')
-            enhanced_text = enhanced_text.replace('?', '? ')
-            
-            # Add some British butler-like phrases occasionally
-            if random.random() < 0.1 and not text.startswith(("I'm afraid", "Unfortunately")):
-                british_phrases = [
-                    f"If I may say so, {self.user_title}, ",
-                    f"I believe, {self.user_title}, that ",
-                    f"Might I suggest that ",
-                    f"If I may be so bold, {self.user_title}, ",
-                    f"Indeed, {self.user_title}, "
-                ]
-                enhanced_text = random.choice(british_phrases) + enhanced_text[0].lower() + enhanced_text[1:]
-            
-            if print_output:
-                print(f"JARVIS: {text}")
-            
-            # Break speech into chunks for better interruption handling
-            chunks = re.split('(?<=[.!?]) +', enhanced_text)
+            # Break speech into natural phrases using punctuation and conjunctions
+            phrases = self._split_into_natural_phrases(enhanced_text)
             
             self.currently_speaking = True
             self.interrupt_speech = False
@@ -283,18 +290,22 @@ class JarvisAssistant:
             self.engine.setProperty('rate', self.voice_settings['rate'])
             self.engine.setProperty('volume', self.voice_settings['volume'])
             
-            # Speak each chunk, allowing for interruption between them
-            for chunk in chunks:
+            # Speak each phrase with appropriate pacing and emphasis
+            for phrase in phrases:
                 if self.interrupt_speech:
                     self.currently_speaking = False
                     self.interrupt_speech = False
                     break
-                    
-                self.engine.say(chunk)
+                
+                # Adjust rate and volume dynamically based on phrase content
+                self._adjust_speech_dynamics(phrase)
+                
+                self.engine.say(phrase)
                 self.engine.runAndWait()
                 
-                # Brief pause to check for interruptions
-                time.sleep(0.1)
+                # Add natural pauses between phrases
+                pause_duration = self._calculate_pause_duration(phrase)
+                time.sleep(pause_duration)
             
             self.currently_speaking = False
             
@@ -302,108 +313,355 @@ class JarvisAssistant:
             print(f"Error in speech synthesis: {e}")
             if print_output:
                 print(f"JARVIS: {text}")  # Fallback to text output
-    
-    def listen(self, timeout=5, interrupt_mode=False):
-        """Listen for voice commands with enhanced UI feedback"""
-        listening_animation = None
-        processing_animation = None
-        
+
+    def _add_personality_markers(self, text):
+        """Add personality markers based on context"""
         try:
-            with sr.Microphone() as source:
-                if not interrupt_mode:
-                    try:
-                        # Start listening animation
-                        print("🎤 Listening...")
-                        listening_animation = self.ui.show_listening_animation()
-                        next(listening_animation)
-                    except Exception as e:
-                        print(f"Animation error (non-critical): {e}")
-                
-                # Adjust for ambient noise more frequently but quickly
-                self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
-                
-                # Record audio with more generous timeouts
-                audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=15)
-                
-                # Convert audio to numpy array for processing
-                audio_data = np.frombuffer(audio.get_raw_data(), dtype=np.int16).astype(np.float32)
-                
-                if not interrupt_mode:
-                    try:
-                        # Stop listening animation and start processing animation
-                        if listening_animation:
-                            listening_animation.close()
-                            listening_animation = None
-                        
-                        processing_animation = self.ui.show_processing_animation("Processing speech")
-                        next(processing_animation)
-                    except Exception as e:
-                        print(f"Animation error (non-critical): {e}")
-                
-                # Check audio level
-                audio_level = np.abs(audio_data).mean()
-                if audio_level < 100:  # Adjust this threshold based on testing
-                    if not interrupt_mode:
-                        self.ui.display_error("Audio level too low. Please speak louder or check your microphone.")
-                    return ""
-                
-                # Detect voice activity
-                if not self.detect_voice_activity(audio_data):
-                    if not interrupt_mode:
-                        self.ui.display_error("No voice detected. Please try speaking again.")
-                    return ""
-                
-                # Try multiple speech recognition attempts
-                text = None
-                errors = []
-                
-                # Try with different language settings if the first attempt fails
-                for lang in [self.current_language, 'en']:
-                    try:
-                        text = self.recognizer.recognize_google(audio, language=lang)
-                        if text:
-                            break
-                    except sr.UnknownValueError:
-                        errors.append(f"Could not understand audio (tried {lang})")
-                    except sr.RequestError as e:
-                        errors.append(f"Google Speech Recognition error: {str(e)}")
-                    except Exception as e:
-                        errors.append(f"Recognition error: {str(e)}")
-                
-                if not text:
-                    if not interrupt_mode:
-                        self.ui.display_error("\n".join(errors))
-                    return ""
-                
-                # Process the recognized text
-                if len(text.split()) > 3:  # Only analyze pace for longer phrases
-                    self.analyze_speaking_pace(audio_data, text)
-                
-                if not interrupt_mode:
-                    self.ui.display_speech(text, user=True)
-                
-                return text.lower()
-                
-        except sr.WaitTimeoutError:
-            if not interrupt_mode:
-                self.ui.display_error("Listening timed out. Please try again.")
-            return ""
+            # Add British butler-like phrases based on formality and context
+            if not text.startswith(("I'm afraid", "Unfortunately", "My apologies")):
+                formal_markers = {
+                    'suggestion': [
+                        f"If I may suggest, {self.user_title}, ",
+                        f"Might I recommend, {self.user_title}, ",
+                        f"If you'll permit me, {self.user_title}, ",
+                    ],
+                    'observation': [
+                        f"I couldn't help but notice, {self.user_title}, ",
+                        f"It appears to me, {self.user_title}, ",
+                        f"If I may make an observation, {self.user_title}, ",
+                    ],
+                    'action': [
+                        f"At once, {self.user_title}. ",
+                        f"Right away, {self.user_title}. ",
+                        f"Consider it done, {self.user_title}. ",
+                    ],
+                    'acknowledgment': [
+                        f"Indeed, {self.user_title}. ",
+                        f"Precisely, {self.user_title}. ",
+                        f"Most certainly, {self.user_title}. ",
+                    ]
+                }
+
+                # Determine the type of response
+                if any(word in text.lower() for word in ['should', 'could', 'would', 'suggest', 'recommend']):
+                    marker_type = 'suggestion'
+                elif any(word in text.lower() for word in ['notice', 'observe', 'seem', 'appear']):
+                    marker_type = 'observation'
+                elif any(word in text.lower() for word in ['will', 'going to', 'about to']):
+                    marker_type = 'action'
+                else:
+                    marker_type = 'acknowledgment'
+
+                # Add marker with reduced probability for more natural conversation
+                if random.random() < 0.3:  # 30% chance to add a marker
+                    text = random.choice(formal_markers[marker_type]) + text[0].lower() + text[1:]
+
+            return text
+        except Exception as e:
+            print(f"Error adding personality markers: {e}")
+            return text
+
+    def _split_into_natural_phrases(self, text):
+        """Split text into natural phrases for more human-like speech"""
+        try:
+            # Split on major punctuation and conjunctions
+            delimiters = r'[.!?;]\s+|\s+(?:and|but|or|because|however|therefore)\s+'
+            phrases = re.split(delimiters, text)
+            
+            # Clean up phrases and recombine short ones
+            cleaned_phrases = []
+            current_phrase = ""
+            
+            for phrase in phrases:
+                phrase = phrase.strip()
+                if not phrase:
+                    continue
+                    
+                # Combine short phrases with the next one
+                if len(current_phrase.split()) + len(phrase.split()) < 8:
+                    current_phrase = f"{current_phrase} {phrase}".strip()
+                else:
+                    if current_phrase:
+                        cleaned_phrases.append(current_phrase)
+                    current_phrase = phrase
+            
+            if current_phrase:
+                cleaned_phrases.append(current_phrase)
+            
+            return cleaned_phrases
+        except Exception as e:
+            print(f"Error splitting phrases: {e}")
+            return [text]
+
+    def _adjust_speech_dynamics(self, phrase):
+        """Adjust speech rate and volume based on phrase content"""
+        try:
+            base_rate = self.voice_settings['rate']
+            base_volume = self.voice_settings['volume']
+            
+            # Slow down for important information
+            if any(word in phrase.lower() for word in ['warning', 'caution', 'important', 'critical']):
+                self.engine.setProperty('rate', base_rate * 0.85)
+            
+            # Speed up for parenthetical information
+            elif phrase.startswith(('(', '[')) or 'by the way' in phrase.lower():
+                self.engine.setProperty('rate', base_rate * 1.15)
+            
+            # Reset to base settings after adjustments
+            self.engine.setProperty('rate', base_rate)
+            self.engine.setProperty('volume', base_volume)
             
         except Exception as e:
-            if not interrupt_mode:
-                self.ui.display_error(f"Error during voice recognition: {str(e)}\nPlease check your microphone settings.")
-            print(f"Voice recognition error: {e}")
-            return ""
+            print(f"Error adjusting speech dynamics: {e}")
+
+    def _calculate_pause_duration(self, phrase):
+        """Calculate appropriate pause duration based on phrase content"""
+        try:
+            base_pause = self.voice_settings['pause_duration']
             
-        finally:
-            # Clean up any remaining animations
+            # Longer pauses after sentences
+            if phrase.endswith(('.', '!', '?')):
+                return base_pause * 1.5
+            
+            # Shorter pauses for connected phrases
+            elif phrase.endswith(','):
+                return base_pause * 0.5
+            
+            # Medium pauses for other cases
+            return base_pause
+            
+        except Exception as e:
+            print(f"Error calculating pause duration: {e}")
+            return 0.1
+
+    def enhance_speech(self, text: str) -> str:
+        """Clean up text for natural speech"""
+        try:
+            # Remove all SSML tags
+            text = re.sub(r'<[^>]+>', '', text)
+            
+            # Remove emotional markers
+            text = text.replace('*with emphasis*', '')
+            text = text.replace('*softly*', '')
+            text = text.replace('*with concern*', '')
+            text = text.replace('*with satisfaction*', '')
+            text = text.replace('*with caution*', '')
+            
+            # Clean up extra spaces and punctuation
+            text = ' '.join(text.split())
+            text = text.replace(' ,', ',')
+            text = text.replace(' .', '.')
+            text = text.replace(' !', '!')
+            text = text.replace(' ?', '?')
+            
+            return text
+            
+        except Exception as e:
+            print(f"Error enhancing speech: {e}")
+            return text
+
+    def _continuous_listen(self):
+        """Background thread for continuous audio monitoring with improved handling"""
+        def audio_callback(indata, frames, time, status):
+            if status:
+                print(f"Audio callback status: {status}")
+            if not self.is_listening:
+                return
             try:
-                if listening_animation:
-                    listening_animation.close()
-                if processing_animation:
-                    processing_animation.close()
-            except:
-                pass
+                # Convert to float32 and normalize
+                audio_data = indata.flatten().astype(np.float32) / np.iinfo(np.int16).max
+                self.audio_queue.put(audio_data)
+            except Exception as e:
+                print(f"Error in audio callback: {e}")
+
+        try:
+            with sd.InputStream(callback=audio_callback,
+                              channels=1,
+                              samplerate=self.sample_rate,
+                              blocksize=int(self.sample_rate * self.frame_duration),
+                              dtype=np.float32):
+                while True:
+                    if self.is_listening:
+                        try:
+                            audio_data = self.audio_queue.get(timeout=0.1)
+                            if self.detect_voice_activity(audio_data):
+                                self.process_voice_input(audio_data)
+                        except queue.Empty:
+                            continue
+                        except Exception as e:
+                            print(f"Error processing audio: {e}")
+                    time.sleep(0.01)
+        except Exception as e:
+            print(f"Error in continuous listening: {e}")
+
+    def enhance_audio(self, audio_data):
+        """Apply real-time audio enhancements with improved noise handling"""
+        try:
+            if self.voice_enhancement['noise_reduction']:
+                # Apply noise reduction with better parameters
+                if self.noise_profile is None:
+                    self.noise_profile = audio_data[:int(self.sample_rate * 0.1)]
+                audio_data = nr.reduce_noise(
+                    y=audio_data,
+                    sr=self.sample_rate,
+                    prop_decrease=0.85,
+                    n_jobs=2
+                )
+
+            if self.voice_enhancement['voice_normalization']:
+                # Normalize volume with peak limiting
+                peak = np.abs(audio_data).max()
+                if peak > 0:
+                    audio_data = audio_data / peak * 0.9
+
+            if self.voice_enhancement['automatic_gain']:
+                # Dynamic range compression
+                threshold = -20
+                ratio = 4
+                audio_data = self.apply_compression(audio_data, threshold, ratio)
+
+            return audio_data
+        except Exception as e:
+            print(f"Error enhancing audio: {e}")
+            return audio_data
+
+    def apply_compression(self, audio_data, threshold, ratio):
+        """Apply dynamic range compression to audio"""
+        try:
+            # Convert to dB
+            db = 20 * np.log10(np.abs(audio_data) + 1e-10)
+            
+            # Apply compression
+            mask = db > threshold
+            db[mask] = threshold + (db[mask] - threshold) / ratio
+            
+            # Convert back to linear
+            return np.sign(audio_data) * (10 ** (db / 20))
+        except Exception as e:
+            print(f"Error applying compression: {e}")
+            return audio_data
+    
+    def listen(self, timeout=5, interrupt_mode=False):
+        """Enhanced listen method with improved error handling and voice detection"""
+        try:
+            # Initialize recognizer and microphone
+            with sr.Microphone() as source:
+                print("\n🎤 Listening...")
+                
+                # Show listening animation
+                try:
+                    listening_animation = self.ui.show_listening_animation()
+                    next(listening_animation)
+                except Exception as e:
+                    print(f"Animation error (non-critical): {e}")
+                
+                try:
+                    # Adjust for ambient noise
+                    self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                    
+                    # Listen for audio
+                    audio = self.recognizer.listen(source, timeout=timeout, phrase_time_limit=15)
+                    
+                    # Multiple recognition attempts
+                    text = None
+                    errors = []
+                    
+                    # Try Google Speech Recognition first
+                    try:
+                        text = self.recognizer.recognize_google(audio)
+                    except sr.UnknownValueError:
+                        errors.append("Google Speech Recognition could not understand audio")
+                    except sr.RequestError as e:
+                        errors.append(f"Could not request results from Google Speech Recognition service; {e}")
+                    
+                    # If Google fails, try Sphinx as fallback
+                    if not text:
+                        try:
+                            text = self.recognizer.recognize_sphinx(audio)
+                        except:
+                            errors.append("Sphinx Recognition failed")
+                    
+                    if text:
+                        if not interrupt_mode:
+                            self.ui.display_speech(text, user=True)
+                        return text.lower()
+                    else:
+                        if not interrupt_mode:
+                            error_msg = " | ".join(errors)
+                            self.ui.display_error(f"Could not understand audio: {error_msg}")
+                        return ""
+                        
+                except sr.WaitTimeoutError:
+                    if not interrupt_mode:
+                        self.ui.display_error("Listening timed out. Please try again.")
+                    return ""
+                    
+                except Exception as e:
+                    if not interrupt_mode:
+                        self.ui.display_error(f"Error during listening: {e}")
+                    return ""
+                    
+                finally:
+                    try:
+                        if 'listening_animation' in locals():
+                            listening_animation.close()
+                    except:
+                        pass
+                        
+        except Exception as e:
+            print(f"Critical error in listen method: {e}")
+            if not interrupt_mode:
+                self.ui.display_error("Error accessing microphone. Please check your microphone settings.")
+            return ""
+
+    def perform_speech_recognition(self, audio_data):
+        """Attempt speech recognition with multiple engines"""
+        try:
+            # Convert audio data to format needed by speech_recognition
+            audio = sr.AudioData(audio_data.tobytes(), self.sample_rate, 2)
+            
+            # Try multiple recognition engines
+            engines = [
+                (self.recognizer.recognize_google, {}),
+                (self.recognizer.recognize_sphinx, {'language': 'en-US'}),
+                (self.recognizer.recognize_google_cloud, {'language': 'en-US'}),
+            ]
+            
+            errors = []
+            for recognize_func, kwargs in engines:
+                try:
+                    return recognize_func(audio, **kwargs)
+                except sr.UnknownValueError:
+                    errors.append("Speech not understood")
+                except sr.RequestError as e:
+                    errors.append(f"Recognition error: {str(e)}")
+                except Exception as e:
+                    errors.append(f"Engine error: {str(e)}")
+            
+            print("Recognition errors:", errors)
+            return None
+            
+        except Exception as e:
+            print(f"Error in speech recognition: {e}")
+            return None
+
+    def update_voice_feedback(self, audio_data):
+        """Update real-time voice feedback"""
+        try:
+            # Calculate audio level for visualization
+            audio_level = np.abs(audio_data).mean()
+            
+            # Update UI with voice activity
+            if audio_level > self.voice_threshold:
+                self.ui.update_voice_activity(audio_level)
+            
+            # Detect emotion in real-time
+            emotion = self.detect_emotion(audio_data)
+            if emotion != "neutral":
+                self.ui.update_emotion_display(emotion)
+                
+        except Exception as e:
+            print(f"Error updating voice feedback: {e}")
     
     def background_listener(self):
         """Background thread to listen for interruptions while speaking"""
@@ -496,7 +754,7 @@ class JarvisAssistant:
                 
             # Cache the response
             self.cache_response(query, cleaned_response)
-            
+                
             return cleaned_response
             
         except Exception as e:
@@ -523,17 +781,17 @@ class JarvisAssistant:
             self.response_cache.pop(oldest_key)
     
     # Basic feature functions
-    def get_time(self):
+    def get_time(self, command=""):
         """Get current time"""
         current_time = datetime.datetime.now().strftime("%H:%M:%S")
         return f"The current time is {current_time}, {self.user_title}."
     
-    def get_date(self):
+    def get_date(self, command=""):
         """Get current date"""
         current_date = datetime.datetime.now().strftime("%A, %B %d, %Y")
         return f"Today is {current_date}, {self.user_title}."
     
-    def get_day(self, query=""):
+    def get_day(self, command=""):
         """Get current day of week"""
         current_day = datetime.datetime.now().strftime("%A")
         return f"Today is {current_day}, {self.user_title}."
@@ -626,7 +884,7 @@ class JarvisAssistant:
         except:
             return f"I encountered an issue while accessing your system information, {self.user_title}."
     
-    def cpu_info(self):
+    def cpu_info(self, command=""):
         """Get CPU usage information"""
         try:
             cpu_usage = psutil.cpu_percent(interval=1)
@@ -643,7 +901,7 @@ class JarvisAssistant:
         except:
             return f"I encountered an issue while measuring CPU performance, {self.user_title}."
     
-    def memory_info(self):
+    def memory_info(self, command=""):
         """Get memory usage information"""
         try:
             memory = psutil.virtual_memory()
@@ -1305,7 +1563,7 @@ class JarvisAssistant:
                 print("📊 Calibrating for ambient noise... Please stay quiet for a moment")
                 
                 # Adjust recognition settings for better accuracy
-                self.recognizer.energy_threshold = 300  # Initial threshold
+                self.recognizer.energy_threshold = 4000  # Initial threshold
                 self.recognizer.dynamic_energy_threshold = True  # Enable dynamic adjustment
                 self.recognizer.dynamic_energy_adjustment_damping = 0.15  # More responsive adjustment
                 self.recognizer.dynamic_energy_ratio = 1.5  # More sensitive
@@ -1461,60 +1719,31 @@ class JarvisAssistant:
         return hash1 == hash2
     
     def detect_voice_activity(self, audio_data: np.ndarray) -> bool:
-        """Detect if there is voice activity in the audio data"""
+        """Enhanced voice activity detection using energy levels and zero-crossing rate"""
         try:
             # Calculate RMS energy
-            rms = np.sqrt(np.mean(audio_data**2))
+            energy = np.sqrt(np.mean(audio_data**2))
             
-            # Check if energy is above threshold
-            if rms > self.vad_threshold:
+            # Calculate zero-crossing rate
+            zero_crossings = np.sum(np.abs(np.diff(np.signbit(audio_data)))) / len(audio_data)
+            
+            # Combine energy and zero-crossing rate for better detection
+            is_speech = (energy > self.voice_threshold) and (zero_crossings > 0.1)
+            
+            if is_speech:
                 self.last_speech_time = datetime.datetime.now()
-                return True
             
-            # Check if we've been silent for too long
-            if self.last_speech_time:
-                silence_duration = (datetime.datetime.now() - self.last_speech_time).total_seconds()
-                if silence_duration > self.silence_duration:
-                    return False
+            return is_speech
             
-            return False
         except Exception as e:
-            print(f"Error detecting voice activity: {e}")
+            print(f"Error in voice activity detection: {e}")
             return False
-    
-    def enhance_speech(self, text: str) -> str:
-        """Enhance speech with natural intonation and emphasis"""
-        try:
-            # Add emphasis to important words
-            words = text.split()
-            enhanced_words = []
-            
-            for word in words:
-                # Add emphasis to words in all caps or with special characters
-                if word.isupper() or any(c in word for c in '!?*'):
-                    enhanced_words.append(f"<emphasis level='strong'>{word}</emphasis>")
-                else:
-                    enhanced_words.append(word)
-            
-            # Add natural pauses
-            enhanced_text = ' '.join(enhanced_words)
-            pause_duration = int(self.voice_settings['pause_duration'] * 1000)
-            pause_duration_long = int(self.voice_settings['pause_duration'] * 1.5 * 1000)
-            
-            enhanced_text = enhanced_text.replace('.', f'.<break time="{pause_duration}ms"/>')
-            enhanced_text = enhanced_text.replace('!', f'!<break time="{pause_duration_long}ms"/>')
-            enhanced_text = enhanced_text.replace('?', f'?<break time="{pause_duration_long}ms"/>')
-            
-            return enhanced_text
-        except Exception as e:
-            print(f"Error enhancing speech: {e}")
-            return text
 
 # Example usage
 if __name__ == "__main__":
     try:
         # Replace with your actual Gemini API key
-        API_KEY = "AIzaSyADsfm9r5e6Ok18pFXiUmXzOX1_BLuQzPs"
+        API_KEY = "AIzaSyCTfcYaHgtYPewaGJ7INVgHMblxK2t8a64"
         
         # Create and run Jarvis
         jarvis = JarvisAssistant(API_KEY)
@@ -1522,4 +1751,5 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\nJarvis shutting down...")
     except Exception as e:
+        print(f"Critical error: {e}")
         print(f"Critical error: {e}")
