@@ -7,4 +7,5 @@ wikipedia==1.4.0
 google==3.0.0
 python-dateutil==2.8.2
 PyAudio==0.2.13
-googlesearch-python==1.2.3 
+googlesearch-python==1.2.3
+newsapi-python==0.2.7 

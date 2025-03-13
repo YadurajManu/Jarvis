@@ -72,6 +72,29 @@ The code includes placeholders for several features that require additional setu
 - Translation (requires translation API)
 - Camera activation and screenshots (requires system-specific implementation)
 
+### News Feature Setup
+
+To use the news briefing feature:
+
+1. Get a free API key from [NewsAPI](https://newsapi.org/)
+2. Replace `YOUR_NEWS_API_KEY` in the code with your actual API key
+3. Use commands like:
+   - "Get me the latest news"
+   - "What's happening in technology news"
+   - "Tell me about sports news"
+   - "Get me business news"
+   - "Open article 2" (after getting news headlines)
+
+Available news categories:
+- Business
+- Entertainment
+- Health
+- Science
+- Sports
+- Technology
+- Politics
+- World (general news)
+
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.

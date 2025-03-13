@@ -28,6 +28,9 @@ class JarvisAssistant:
         genai.configure(api_key=self.api_key)
         self.model = genai.GenerativeModel('gemini-1.5-pro')
         
+        # News API key - replace with your actual key
+        self.news_api_key = "YOUR_NEWS_API_KEY"  # Get from https://newsapi.org/
+        
         # Response cache to improve performance
         self.response_cache = {}
         self.max_cache_size = 50  # Maximum number of cached responses
@@ -136,6 +139,7 @@ class JarvisAssistant:
             "translate": self.translate_text,
             "camera": self.activate_camera,
             "screenshot": self.take_screenshot,
+            "news": self.get_news,  # Add news feature
         }
         
         # Custom protocols storage
@@ -376,17 +380,17 @@ class JarvisAssistant:
             self.response_cache.pop(oldest_key)
     
     # Basic feature functions
-    def get_time(self, query=None):
+    def get_time(self):
         """Get current time"""
         current_time = datetime.datetime.now().strftime("%H:%M:%S")
         return f"The current time is {current_time}, {self.user_title}."
     
-    def get_date(self, query=None):
+    def get_date(self):
         """Get current date"""
         current_date = datetime.datetime.now().strftime("%A, %B %d, %Y")
         return f"Today is {current_date}, {self.user_title}."
     
-    def get_day(self, query=None):
+    def get_day(self):
         """Get current day of week"""
         current_day = datetime.datetime.now().strftime("%A")
         return f"Today is {current_day}, {self.user_title}."
@@ -401,7 +405,7 @@ class JarvisAssistant:
         else:
             return f"I'm afraid my weather systems require configuration with an OpenWeatherMap API key, {self.user_title}. Would you like me to help you set that up? It's a rather simple process."
     
-    def open_browser(self, query=None):
+    def open_browser(self):
         """Open web browser"""
         try:
             webbrowser.open("https://www.google.com")
@@ -455,7 +459,7 @@ class JarvisAssistant:
             print(f"Error in Wikipedia search: {e}")
             return f"I encountered an issue while searching Wikipedia, {self.user_title}. Perhaps try a different query?"
     
-    def system_info(self, query=None):
+    def system_info(self):
         """Get system information"""
         try:
             system = platform.system()
@@ -466,7 +470,7 @@ class JarvisAssistant:
         except:
             return f"I encountered an issue while accessing your system information, {self.user_title}."
     
-    def cpu_info(self, query=None):
+    def cpu_info(self):
         """Get CPU usage information"""
         try:
             cpu_usage = psutil.cpu_percent(interval=1)
@@ -483,7 +487,7 @@ class JarvisAssistant:
         except:
             return f"I encountered an issue while measuring CPU performance, {self.user_title}."
     
-    def memory_info(self, query=None):
+    def memory_info(self):
         """Get memory usage information"""
         try:
             memory = psutil.virtual_memory()
@@ -500,7 +504,7 @@ class JarvisAssistant:
         except:
             return f"I encountered an issue while measuring memory usage, {self.user_title}."
     
-    def ip_info(self, query=None):
+    def ip_info(self):
         """Get IP address information"""
         try:
             hostname = socket.gethostname()
@@ -517,7 +521,7 @@ class JarvisAssistant:
         except:
             return f"I encountered an issue while retrieving your IP information, {self.user_title}."
     
-    def tell_joke(self, query=None):
+    def tell_joke(self):
         """Tell a joke in Jarvis style"""
         jokes = [
             f"Why don't scientists trust atoms? Because they make up everything. Much like your excuses for not finishing the Mark 47 upgrades, {self.user_title}.",
@@ -719,7 +723,7 @@ class JarvisAssistant:
         """Placeholder for email sending functionality"""
         return f"I apologize, {self.user_title}, but the email module requires configuration with your email credentials. Would you like me to guide you through setting that up?"
     
-    def read_email(self, query=None):
+    def read_email(self):
         """Placeholder for email reading functionality"""
         return f"I apologize, {self.user_title}, but the email module requires configuration with your email credentials. Would you like me to guide you through setting that up?"
     
@@ -787,13 +791,130 @@ class JarvisAssistant:
         else:
             return f"To use the translation feature, please specify what to translate and the target language, {self.user_title}. For example, 'translate hello to Spanish'."
     
-    def activate_camera(self, query=None):
+    def activate_camera(self):
         """Activate camera (placeholder)"""
         return f"Camera activation requires system-specific implementation, {self.user_title}. Would you like me to help you set up this integration?"
     
-    def take_screenshot(self, query=None):
+    def take_screenshot(self):
         """Take a screenshot (placeholder)"""
         return f"Screenshot functionality requires system-specific implementation, {self.user_title}. Would you like me to help you set up this integration?"
+    
+    def get_news(self, query=""):
+        """Get the latest news with optional category filtering"""
+        try:
+            # Extract category if specified
+            category_match = re.search(r"news (?:about|on|for|in)?\s+(.+)", query, re.IGNORECASE)
+            category = None
+            
+            if category_match:
+                category_text = category_match.group(1).strip().lower()
+                # Map common category terms to NewsAPI categories
+                category_mapping = {
+                    "business": "business",
+                    "entertainment": "entertainment",
+                    "health": "health",
+                    "science": "science",
+                    "sports": "sports",
+                    "technology": "technology",
+                    "tech": "technology",
+                    "politics": "politics",
+                    "world": "general"
+                }
+                
+                # Find the closest category match
+                for key, value in category_mapping.items():
+                    if key in category_text:
+                        category = value
+                        break
+            
+            # Build the API URL
+            base_url = "https://newsapi.org/v2/top-headlines"
+            params = {
+                "apiKey": self.news_api_key,
+                "language": "en",
+                "pageSize": 5  # Limit to 5 articles for brevity
+            }
+            
+            if category and category != "politics":  # Politics isn't a direct category in NewsAPI
+                params["category"] = category
+            elif category == "politics":
+                params["q"] = "politics"  # Use query parameter for politics
+            
+            # Make the API request
+            response = requests.get(base_url, params=params)
+            news_data = response.json()
+            
+            if response.status_code != 200:
+                return f"I'm having trouble accessing the news service, {self.user_title}. Error: {news_data.get('message', 'Unknown error')}"
+            
+            articles = news_data.get("articles", [])
+            
+            if not articles:
+                if category:
+                    return f"I couldn't find any recent news about {category}, {self.user_title}. Would you like to try a different category?"
+                else:
+                    return f"I couldn't find any recent news, {self.user_title}. Perhaps try again later."
+            
+            # Format the news briefing
+            if category:
+                news_intro = f"Here are the latest headlines in {category}, {self.user_title}:"
+            else:
+                news_intro = f"Here are today's top headlines, {self.user_title}:"
+            
+            news_items = []
+            for i, article in enumerate(articles, 1):
+                source = article.get("source", {}).get("name", "Unknown source")
+                title = article.get("title", "No title available")
+                
+                # Clean up title (some APIs include source in title)
+                title = title.split(" - ")[0]
+                
+                news_items.append(f"{i}. From {source}: {title}")
+            
+            news_text = news_intro + "\n\n" + "\n".join(news_items)
+            
+            # Add option to read full articles
+            news_text += f"\n\nWould you like me to open any of these articles in your browser, {self.user_title}?"
+            
+            # Store articles for later reference
+            self.recent_news_articles = articles
+            
+            return news_text
+            
+        except Exception as e:
+            print(f"Error fetching news: {e}")
+            return f"I encountered an issue while fetching the news, {self.user_title}. Please check your internet connection and news API key."
+    
+    def open_news_article(self, query):
+        """Open a specific news article in the browser"""
+        try:
+            # Check if we have recent articles
+            if not hasattr(self, 'recent_news_articles') or not self.recent_news_articles:
+                return f"I don't have any recent news articles to show you, {self.user_title}. Try asking for the news first."
+            
+            # Extract article number
+            number_match = re.search(r"(?:open|show|read)\s+(?:article|news)?\s*(?:number)?\s*(\d+)", query, re.IGNORECASE)
+            
+            if number_match:
+                article_num = int(number_match.group(1))
+                
+                if 1 <= article_num <= len(self.recent_news_articles):
+                    article = self.recent_news_articles[article_num - 1]
+                    article_url = article.get("url")
+                    
+                    if article_url:
+                        webbrowser.open(article_url)
+                        return f"I've opened article {article_num} in your browser, {self.user_title}."
+                    else:
+                        return f"I'm sorry, but the URL for article {article_num} is not available, {self.user_title}."
+                else:
+                    return f"Please specify a valid article number between 1 and {len(self.recent_news_articles)}, {self.user_title}."
+            else:
+                return f"Please specify which article number you'd like to open, {self.user_title}. For example, 'open article 2'."
+                
+        except Exception as e:
+            print(f"Error opening news article: {e}")
+            return f"I encountered an issue while trying to open the article, {self.user_title}."
     
     def process_command(self, command):
         """Process user commands and determine appropriate action"""
@@ -811,11 +932,16 @@ class JarvisAssistant:
                 self.active = False
                 return
             
+            # Check for news article opening command
+            if re.search(r"(?:open|show|read)\s+(?:article|news)", clean_command, re.IGNORECASE):
+                response = self.open_news_article(clean_command)
+                self.speak(response)
+                return
+            
             # Fast path for common commands - check direct feature matches first
             for feature_key, feature_func in self.features.items():
                 if feature_key in clean_command:
                     print(f"Feature match found: {feature_key}")
-                    # All functions now accept an optional parameter
                     response = feature_func(clean_command)
                     self.speak(response)
                     return
