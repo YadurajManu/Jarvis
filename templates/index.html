@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>J.A.R.V.I.S</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="jarvis-ui">
+        <!-- Startup Sequence -->
+        <div class="startup-sequence">
+            <div class="arc-reactor">
+                <div class="reactor-core"></div>
+                <div class="reactor-ring"></div>
+            </div>
+            <div class="boot-messages"></div>
+        </div>
+
+        <!-- Main Interface -->
+        <div class="interface-container">
+            <!-- HUD Elements -->
+            <div class="hud-overlay">
+                <div class="hud-top">
+                    <div class="hud-status">
+                        <span class="status-text">JARVIS ONLINE</span>
+                        <div class="status-dots">
+                            <span></span><span></span><span></span>
+                        </div>
+                    </div>
+                    <div class="hud-time"></div>
+                </div>
+                <div class="hud-side left">
+                    <div class="system-stats">
+                        <div class="stat-item">CPU: <span id="cpu-usage">0%</span></div>
+                        <div class="stat-item">MEM: <span id="mem-usage">0%</span></div>
+                    </div>
+                </div>
+                <div class="hud-side right">
+                    <div class="voice-indicator">
+                        <div class="voice-waves"></div>
+                        <span class="voice-status">LISTENING</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Central Console -->
+            <div class="central-console">
+                <!-- Chat Interface -->
+                <div class="chat-container">
+                    <div class="chat-messages"></div>
+                </div>
+                
+                <!-- Audio Visualizer -->
+                <div class="visualizer-container">
+                    <canvas id="audioVisualizer"></canvas>
+                </div>
+            </div>
+
+            <!-- Command Input -->
+            <div class="command-input">
+                <div class="input-field">
+                    <input type="text" id="textCommand" placeholder="Type a command or speak...">
+                    <button id="sendCommand">
+                        <div class="button-glow"></div>
+                        <span>SEND</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Workflows Panel -->
+        <div class="workflows-panel">
+            <div class="panel-header">WORKFLOWS</div>
+            <div class="workflows-list"></div>
+        </div>
+    </div>
+
+    <!-- Loading Screen -->
+    <div class="loading-screen">
+        <div class="loading-reactor">
+            <div class="reactor-core"></div>
+            <div class="reactor-rings">
+                <div class="ring"></div>
+                <div class="ring"></div>
+                <div class="ring"></div>
+            </div>
+        </div>
+        <div class="loading-text">INITIALIZING JARVIS</div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+</body>
+</html> 

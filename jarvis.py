@@ -18,10 +18,11 @@ from googlesearch import search as google_search
 from concurrent.futures import ThreadPoolExecutor
 
 class JarvisAssistant:
-    def __init__(self, api_key, user_name="Yaduraj"):
+    def __init__(self, api_key, user_name="Yaduraj", web_mode=True):
         # User information
         self.user_name = user_name
         self.user_title = "sir"  # Iron Man style addressing
+        self.web_mode = web_mode
         
         # Initialize Gemini API
         self.api_key = api_key
@@ -44,42 +45,45 @@ class JarvisAssistant:
         self.response_cache = {}
         self.max_cache_size = 50  # Maximum number of cached responses
         
-        # Initialize speech engine with optimized settings
-        try:
-            self.engine = pyttsx3.init()
-            
-            # Configure voice to sound more like movie Jarvis
-            voices = self.engine.getProperty('voices')
-            self.engine.setProperty('voice', voices[0].id)  # Male voice
-            self.engine.setProperty('rate', 165)  # Slightly slower for the British butler feel
-            self.engine.setProperty('volume', 1.0)  # Full volume
-            
-            # Pre-warm the speech engine to reduce latency on first speak
-            self.engine.say("")
-            self.engine.runAndWait()
-            print("Speech engine initialized successfully")
-        except Exception as e:
-            print(f"Error initializing speech engine: {e}")
-            print("Continuing with limited functionality")
+        # Initialize speech engine only in CLI mode
+        if not web_mode:
+            try:
+                self.engine = pyttsx3.init()
+                voices = self.engine.getProperty('voices')
+                self.engine.setProperty('voice', voices[0].id)
+                self.engine.setProperty('rate', 165)
+                self.engine.setProperty('volume', 1.0)
+                self.engine.say("")
+                self.engine.runAndWait()
+                print("Speech engine initialized successfully")
+            except Exception as e:
+                print(f"Error initializing speech engine: {e}")
         
-        # Initialize speech recognition with optimized settings
-        self.recognizer = sr.Recognizer()
-        self.recognizer.energy_threshold = 300  # Adjust based on your microphone sensitivity
-        self.recognizer.dynamic_energy_threshold = True
-        self.recognizer.pause_threshold = 0.6  # Shorter pause threshold for faster response
-        
-        # Check microphone
-        self.check_microphone()
-        
-        # Conversation history for context
-        self.conversation_history = []
+        # Initialize speech recognition only in CLI mode
+        if not web_mode:
+            self.recognizer = sr.Recognizer()
+            self.recognizer.energy_threshold = 300
+            self.recognizer.dynamic_energy_threshold = True
+            self.recognizer.pause_threshold = 0.6
+            self.check_microphone()
         
         # Assistant state
         self.active = True
         self.listening_mode = True
-        self.verbose_mode = True  # For detailed responses
-        self.currently_speaking = False  # Flag to track if Jarvis is speaking
-        self.interrupt_speech = False  # Flag to handle interruptions
+        self.verbose_mode = True
+        self.currently_speaking = False
+        self.interrupt_speech = False
+        
+        # Load saved data
+        self.load_data()
+        
+        # Only show boot sequence in CLI mode
+        if not web_mode:
+            self.system_boot()
+        
+        self.workflows = []  # Store workflows in memory
+        self.last_response = None
+        self.conversation_history = []
         
         # Jarvis speech patterns
         self.acknowledgments = [
@@ -164,16 +168,6 @@ class JarvisAssistant:
         self.music_playing = False
         self.current_volume = 70  # percent
         
-        # Load saved data if available
-        self.load_data()
-        
-        # Start reminder checker in background
-        self.reminder_thread = threading.Thread(target=self.check_reminders, daemon=True)
-        self.reminder_thread.start()
-        
-        # Initialization message
-        self.system_boot()
-        
     def system_boot(self):
         """Simulate Jarvis boot sequence"""
         print("=" * 50)
@@ -206,46 +200,34 @@ class JarvisAssistant:
             return "Good evening"
     
     def speak(self, text, print_output=True):
-        """Convert text to speech with Iron Man Jarvis style and intervention support"""
-        # Add short pauses for more natural speech using commas and periods
-        text = text.replace(',', ', ')
-        text = text.replace('.', '. ')
-        text = text.replace('?', '? ')
-        
-        # Add some British butler-like phrases occasionally
-        if random.random() < 0.1 and not text.startswith(("I'm afraid", "Unfortunately")):
-            british_phrases = [
-                f"If I may say so, {self.user_title}, ",
-                f"I believe, {self.user_title}, that ",
-                f"Might I suggest that ",
-                f"If I may be so bold, {self.user_title}, ",
-                f"Indeed, {self.user_title}, "
-            ]
-            text = random.choice(british_phrases) + text[0].lower() + text[1:]
-        
+        """Modified speak function to work in both web and CLI modes"""
         if print_output:
             print(f"JARVIS: {text}")
         
-        # Break speech into chunks for better interruption handling
-        chunks = re.split('(?<=[.!?]) +', text)
-        
-        self.currently_speaking = True
-        self.interrupt_speech = False
-        
-        # Speak each chunk, allowing for interruption between them
-        for chunk in chunks:
-            if self.interrupt_speech:
-                self.currently_speaking = False
-                self.interrupt_speech = False
-                break
-                
-            self.engine.say(chunk)
-            self.engine.runAndWait()
+        if not self.web_mode:
+            # Only use text-to-speech in CLI mode
+            text = text.replace(',', ', ')
+            text = text.replace('.', '. ')
+            text = text.replace('?', '? ')
             
-            # Brief pause to check for interruptions
-            time.sleep(0.1)
+            chunks = re.split('(?<=[.!?]) +', text)
+            
+            self.currently_speaking = True
+            self.interrupt_speech = False
+            
+            for chunk in chunks:
+                if self.interrupt_speech:
+                    self.currently_speaking = False
+                    self.interrupt_speech = False
+                    break
+                    
+                self.engine.say(chunk)
+                self.engine.runAndWait()
+                time.sleep(0.1)
+            
+            self.currently_speaking = False
         
-        self.currently_speaking = False
+        return text
     
     def listen(self, timeout=5, interrupt_mode=False):
         """Listen for voice commands with optional interruption mode"""
@@ -1064,67 +1046,74 @@ class JarvisAssistant:
             return None
 
     def process_command(self, command):
-        """Process user commands with enhanced context awareness"""
+        """Process commands from both web and CLI interfaces"""
         try:
-            # Remove wake word check to respond to all commands
-            clean_command = command.replace("jarvis", "").replace("hey", "").replace("okay", "").strip()
+            # Clean the command
+            command = command.strip().lower()
             
-            # Log the command being processed
-            print(f"Processing command: '{clean_command}'")
+            # Add to conversation history
+            self.conversation_history.append({"role": "user", "content": command})
             
-            # Check for exit/quit commands
-            if any(exit_cmd in clean_command for exit_cmd in ["exit", "quit", "goodbye", "bye", "shut down", "power off"]):
-                self.speak(f"Shutting down systems. Goodbye, {self.user_title}.")
-                self.active = False
-                return
-            
-            # Handle preference storage
-            if "remember" in clean_command.lower():
-                response = self.remember_preference(clean_command)
-                self.speak(response)
-                return
-            
-            # Check for follow-up questions
-            followup_query = self.handle_followup(clean_command)
-            if followup_query:
-                clean_command = followup_query
-            
-            # Update conversation context
+            # Update context
             self.last_query_time = datetime.datetime.now()
             
-            # Check for news article opening command
-            if re.search(r"(?:open|show|read)\s+(?:article|news)", clean_command, re.IGNORECASE):
-                response = self.open_news_article(clean_command)
-                self.speak(response)
-                return
-            
-            # Fast path for common commands - check direct feature matches first
+            # Check for direct feature matches
             for feature_key, feature_func in self.features.items():
-                if feature_key in clean_command:
-                    print(f"Feature match found: {feature_key}")
-                    self.last_topic = feature_key  # Store the topic
-                    response = feature_func(clean_command)
-                    self.speak(response)
-                    return
-            
-            # Check for volume control as a special case
-            if "volume" in clean_command:
-                response = self.adjust_volume(clean_command)
-                self.speak(response)
-                return
+                if feature_key in command:
+                    self.last_topic = feature_key
+                    response = feature_func(command)
+                    self.conversation_history.append({"role": "assistant", "content": response})
+                    return response
             
             # If no direct match, use Gemini for general conversation
-            print("No direct feature match, using Gemini API")
-            response = self.get_gemini_response(clean_command)
-            self.speak(response)
-            
-            return
+            response = self.get_gemini_response(command)
+            self.conversation_history.append({"role": "assistant", "content": response})
+            return response
             
         except Exception as e:
             print(f"Error processing command: {e}")
-            self.speak(f"I apologize, {self.user_title}, but I encountered an error processing that command.")
-            return
-    
+            return f"I apologize, {self.user_title}, but I encountered an error processing that command."
+
+    def get_workflows(self):
+        """Get all workflows"""
+        return self.workflows
+
+    def create_workflow(self, name):
+        """Create a new workflow"""
+        workflow = {
+            'id': len(self.workflows) + 1,
+            'name': name,
+            'created_at': datetime.now().isoformat(),
+            'steps': []
+        }
+        self.workflows.append(workflow)
+        return workflow
+
+    def execute_workflow(self, name):
+        """Execute a workflow by name"""
+        workflow = next((w for w in self.workflows if w['name'] == name), None)
+        if not workflow:
+            raise ValueError(f"Workflow '{name}' not found")
+        
+        # Execute each step in the workflow
+        responses = []
+        for step in workflow.get('steps', []):
+            try:
+                response = self.process_command(step)
+                responses.append(response)
+            except Exception as e:
+                responses.append(f"Error executing step: {e}")
+        
+        return " ".join(responses) if responses else f"Executed workflow: {name}"
+
+    def get_last_response(self):
+        """Get the last response from Jarvis"""
+        return self.last_response
+
+    def get_conversation_history(self):
+        """Get the conversation history"""
+        return self.conversation_history
+
     def save_data(self):
         """Save user data to file"""
         try:
@@ -1134,7 +1123,8 @@ class JarvisAssistant:
                 "reminders": self.reminders,
                 "conversation_history": self.conversation_history,
                 "response_cache": self.response_cache,
-                "user_preferences": self.user_preferences  # Add preferences to saved data
+                "user_preferences": self.user_preferences,  # Add preferences to saved data
+                "workflows": self.workflows
             }
             
             with open("jarvis_data.json", "w") as f:
@@ -1156,6 +1146,7 @@ class JarvisAssistant:
                 self.conversation_history = data.get("conversation_history", [])
                 self.response_cache = data.get("response_cache", {})
                 self.user_preferences = data.get("user_preferences", {})  # Load preferences
+                self.workflows = data.get("workflows", [])
                 print("Data loaded successfully")
         except Exception as e:
             print(f"Error loading data: {e}")
@@ -1237,14 +1228,344 @@ class JarvisAssistant:
             print("Speech recognition may not work properly")
             return False
 
+    def create_workflow(self, steps):
+        """Create and manage complex automated workflows with advanced voice interaction"""
+        try:
+            # Parse workflow steps and conditions
+            workflow = {
+                'name': '',
+                'steps': [],
+                'conditions': {},
+                'schedule': None,
+                'voice_triggers': [],
+                'last_run': None,
+                'status': 'active',
+                'error_handling': {
+                    'retry_count': 3,
+                    'fallback_actions': {},
+                    'notifications': True
+                }
+            }
+            
+            # Voice interaction for workflow creation
+            self.speak("I'll help you create a new workflow. What shall we name it?")
+            workflow_name = self.listen() or "New Workflow"
+            workflow['name'] = workflow_name.lower().replace(" ", "_")
+            
+            # Get workflow steps through conversation
+            self.speak("Please list the steps for this workflow. I'll confirm each one.")
+            while True:
+                self.speak("What's the next step? Say 'done' when finished.")
+                step = self.listen()
+                
+                if not step or step.lower() == 'done':
+                    break
+                
+                # Parse step for conditions
+                if 'if' in step.lower():
+                    condition = self._parse_condition(step)
+                    workflow['conditions'][len(workflow['steps'])] = condition
+                
+                # Add step with metadata
+                workflow['steps'].append({
+                    'command': step,
+                    'type': self._determine_step_type(step),
+                    'requires_confirmation': False,
+                    'timeout': 30,
+                    'retry_on_fail': True
+                })
+                
+                self.speak(f"Added step: {step}. Would you like to add any specific conditions for this step?")
+                conditions = self.listen()
+                if conditions and 'yes' in conditions.lower():
+                    self._add_step_conditions(workflow['steps'][-1])
+            
+            # Schedule setup
+            self.speak("Would you like to schedule this workflow?")
+            schedule_response = self.listen()
+            if schedule_response and 'yes' in schedule_response.lower():
+                workflow['schedule'] = self._setup_schedule()
+            
+            # Voice trigger setup
+            self.speak("Would you like to set up voice triggers for this workflow?")
+            trigger_response = self.listen()
+            if trigger_response and 'yes' in trigger_response.lower():
+                workflow['voice_triggers'] = self._setup_voice_triggers()
+            
+            # Save workflow
+            self.workflows.append(workflow)
+            self.save_data()
+            
+            response = f"Workflow '{workflow_name}' has been created with {len(workflow['steps'])} steps."
+            if workflow['schedule']:
+                response += f" It will run {workflow['schedule']['description']}."
+            if workflow['voice_triggers']:
+                triggers = ", ".join(workflow['voice_triggers'])
+                response += f" Voice triggers set: {triggers}."
+            
+            return response
+            
+        except Exception as e:
+            print(f"Error creating workflow: {e}")
+            return f"I encountered an issue while creating the workflow, {self.user_title}. Would you like to try again?"
+    
+    def _parse_condition(self, step):
+        """Parse conditional statements in workflow steps"""
+        condition = {
+            'type': 'simple',
+            'check': None,
+            'value': None,
+            'operator': '==',
+            'action_if_true': None,
+            'action_if_false': None
+        }
+        
+        # Extract condition parts
+        if 'if' in step.lower():
+            parts = step.lower().split('if')[1].split('then')
+            if len(parts) >= 2:
+                condition_str = parts[0].strip()
+                action = parts[1].strip()
+                
+                # Parse condition
+                if '=' in condition_str:
+                    condition['operator'] = '=='
+                    check, value = condition_str.split('=')
+                elif '>' in condition_str:
+                    condition['operator'] = '>'
+                    check, value = condition_str.split('>')
+                elif '<' in condition_str:
+                    condition['operator'] = '<'
+                    check, value = condition_str.split('<')
+                
+                condition['check'] = check.strip()
+                condition['value'] = value.strip()
+                condition['action_if_true'] = action
+                
+                # Check for else clause
+                if 'else' in step.lower():
+                    else_action = step.lower().split('else')[1].strip()
+                    condition['action_if_false'] = else_action
+        
+        return condition
+    
+    def _determine_step_type(self, step):
+        """Determine the type of workflow step for appropriate handling"""
+        step_lower = step.lower()
+        
+        if any(cmd in step_lower for cmd in ['remind', 'schedule', 'alarm']):
+            return 'time_based'
+        elif any(cmd in step_lower for cmd in ['if', 'check', 'compare']):
+            return 'conditional'
+        elif any(cmd in step_lower for cmd in ['wait', 'pause', 'delay']):
+            return 'delay'
+        elif any(cmd in step_lower for cmd in ['repeat', 'loop', 'while']):
+            return 'loop'
+        else:
+            return 'command'
+    
+    def _add_step_conditions(self, step):
+        """Add conditions to a workflow step through voice interaction"""
+        self.speak("What conditions would you like to add? You can specify timing, dependencies, or required states.")
+        conditions = self.listen()
+        
+        if conditions:
+            step['conditions'] = {
+                'timing': self._parse_timing_conditions(conditions),
+                'dependencies': self._parse_dependencies(conditions),
+                'required_states': self._parse_required_states(conditions)
+            }
+    
+    def _setup_schedule(self):
+        """Set up workflow schedule through voice interaction"""
+        schedule = {
+            'type': 'once',  # once, daily, weekly, monthly
+            'time': None,
+            'days': [],
+            'description': ''
+        }
+        
+        self.speak("How often should this workflow run? You can say 'once', 'daily', 'weekly', or 'monthly'.")
+        schedule_type = self.listen()
+        
+        if schedule_type:
+            schedule['type'] = schedule_type.lower()
+            
+            if schedule['type'] == 'once':
+                self.speak("When should this run? You can specify a date and time.")
+                schedule['time'] = self._parse_datetime(self.listen())
+                schedule['description'] = f"once at {schedule['time']}"
+            
+            elif schedule['type'] in ['daily', 'weekly', 'monthly']:
+                self.speak("At what time should this run?")
+                schedule['time'] = self._parse_time(self.listen())
+                
+                if schedule['type'] in ['weekly', 'monthly']:
+                    self.speak("On which days should this run?")
+                    schedule['days'] = self._parse_days(self.listen())
+                
+                schedule['description'] = f"{schedule['type']} at {schedule['time']}"
+                if schedule['days']:
+                    schedule['description'] += f" on {', '.join(schedule['days'])}"
+        
+        return schedule
+    
+    def _setup_voice_triggers(self):
+        """Set up voice triggers for workflow activation"""
+        triggers = []
+        
+        self.speak("Please specify voice commands that should trigger this workflow. Say 'done' when finished.")
+        while True:
+            trigger = self.listen()
+            if not trigger or trigger.lower() == 'done':
+                break
+            
+            triggers.append(trigger.lower())
+            self.speak(f"Added trigger: {trigger}. Any more triggers?")
+        
+        return triggers
+    
+    def _parse_datetime(self, datetime_str):
+        """Parse date and time from natural language input"""
+        try:
+            # Use dateutil.parser or similar for more sophisticated parsing
+            # For now, using a simple implementation
+            return datetime.datetime.strptime(datetime_str, "%Y-%m-%d %H:%M")
+        except:
+            return None
+    
+    def _parse_time(self, time_str):
+        """Parse time from natural language input"""
+        try:
+            # Add natural language time parsing
+            # For now, using a simple implementation
+            return datetime.datetime.strptime(time_str, "%H:%M").time()
+        except:
+            return None
+    
+    def _parse_days(self, days_str):
+        """Parse days from natural language input"""
+        days = []
+        day_mapping = {
+            'monday': 0, 'tuesday': 1, 'wednesday': 2, 'thursday': 3,
+            'friday': 4, 'saturday': 5, 'sunday': 6
+        }
+        
+        for day in days_str.lower().split():
+            if day in day_mapping:
+                days.append(day)
+        
+        return days
+    
+    def execute_workflow(self, workflow_name):
+        """Execute a saved workflow with error handling and recovery"""
+        try:
+            workflow = next((w for w in self.workflows if w['name'] == workflow_name), None)
+            if not workflow:
+                return f"I couldn't find a workflow named '{workflow_name}', {self.user_title}."
+            
+            self.speak(f"Executing workflow: {workflow_name}")
+            
+            # Track execution state
+            execution_state = {
+                'current_step': 0,
+                'retries': {},
+                'results': {},
+                'start_time': datetime.datetime.now()
+            }
+            
+            # Execute each step
+            for i, step in enumerate(workflow['steps']):
+                execution_state['current_step'] = i
+                
+                # Check conditions
+                if i in workflow['conditions']:
+                    if not self._evaluate_condition(workflow['conditions'][i]):
+                        continue
+                
+                # Execute step with retry logic
+                success = False
+                retries = 0
+                while not success and retries < workflow['error_handling']['retry_count']:
+                    try:
+                        result = self._execute_step(step)
+                        execution_state['results'][i] = result
+                        success = True
+                    except Exception as e:
+                        retries += 1
+                        execution_state['retries'][i] = retries
+                        if retries >= workflow['error_handling']['retry_count']:
+                            if i in workflow['error_handling']['fallback_actions']:
+                                self._execute_step(workflow['error_handling']['fallback_actions'][i])
+                            raise Exception(f"Step {i} failed after {retries} retries: {e}")
+                        time.sleep(1)  # Wait before retry
+                
+                # Optional step confirmation
+                if step['requires_confirmation']:
+                    self.speak(f"Step {i+1} completed. Should I continue?")
+                    if not self._get_confirmation():
+                        break
+            
+            # Update workflow status
+            workflow['last_run'] = datetime.datetime.now().isoformat()
+            self.save_data()
+            
+            return f"Workflow '{workflow_name}' completed successfully."
+            
+        except Exception as e:
+            print(f"Error executing workflow: {e}")
+            return f"I encountered an issue while executing the workflow, {self.user_title}. Would you like to see the error details?"
+    
+    def _evaluate_condition(self, condition):
+        """Evaluate a workflow condition"""
+        try:
+            if condition['type'] == 'simple':
+                value = self._get_condition_value(condition['check'])
+                if condition['operator'] == '==':
+                    return value == condition['value']
+                elif condition['operator'] == '>':
+                    return value > float(condition['value'])
+                elif condition['operator'] == '<':
+                    return value < float(condition['value'])
+            return True
+        except:
+            return False
+    
+    def _get_condition_value(self, check):
+        """Get value for condition checking"""
+        # Add more sophisticated value retrieval
+        if check == 'time':
+            return datetime.datetime.now().time()
+        elif check == 'day':
+            return datetime.datetime.now().strftime('%A').lower()
+        return None
+    
+    def _execute_step(self, step):
+        """Execute a single workflow step"""
+        if step['type'] == 'command':
+            return self.process_command(step['command'])
+        elif step['type'] == 'time_based':
+            # Handle time-based steps
+            pass
+        elif step['type'] == 'delay':
+            time.sleep(self._parse_delay(step['command']))
+        elif step['type'] == 'loop':
+            # Handle loop steps
+            pass
+        return True
+    
+    def _get_confirmation(self):
+        """Get user confirmation through voice"""
+        self.speak("Please confirm: yes or no")
+        response = self.listen()
+        return response and 'yes' in response.lower()
+
 # Example usage
 if __name__ == "__main__":
+    # Only run the CLI version if script is run directly
     try:
-        # Replace with your actual Gemini API key
         API_KEY = "AIzaSyADsfm9r5e6Ok18pFXiUmXzOX1_BLuQzPs"
-        
-        # Create and run Jarvis
-        jarvis = JarvisAssistant(API_KEY)
+        jarvis = JarvisAssistant(API_KEY, web_mode=False)
         jarvis.run()
     except KeyboardInterrupt:
         print("\nJarvis shutting down...")
