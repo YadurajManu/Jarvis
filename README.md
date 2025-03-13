@@ -36,7 +36,7 @@ A sophisticated AI-powered voice assistant inspired by Tony Stark's JARVIS, feat
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/jarvis-assistant.git
+git clone https://github.com/YadurajManu/jarvis-assistant.git
 cd jarvis-assistant
 ```
 
