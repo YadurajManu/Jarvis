@@ -25,7 +25,7 @@ import wave
 import hashlib
 import base64
 from typing import Dict, List, Optional, Tuple
-from ui_manager import JarvisUI
+from terminal_ui import TerminalUI
 import noisereduce as nr
 from scipy import signal
 import queue
@@ -33,7 +33,7 @@ import queue
 class JarvisAssistant:
     def __init__(self, api_key, user_name="Yaduraj"):
         # Initialize UI manager
-        self.ui = JarvisUI()
+        self.ui = TerminalUI()
         
         # User information
         self.user_name = user_name
@@ -251,7 +251,7 @@ class JarvisAssistant:
         
     def system_boot(self):
         """Simulate Jarvis boot sequence with enhanced UI"""
-        self.ui.show_boot_sequence()
+        self.ui.display_boot_sequence()
         
         current_time = datetime.datetime.now().strftime("%H:%M")
         greeting = self.get_greeting_by_time()
