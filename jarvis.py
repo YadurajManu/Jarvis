@@ -28,8 +28,17 @@ class JarvisAssistant:
         genai.configure(api_key=self.api_key)
         self.model = genai.GenerativeModel('gemini-1.5-pro')
         
-        # News API key - replace with your actual key
-        self.news_api_key = "YOUR_NEWS_API_KEY"  # Get from https://newsapi.org/
+        # News API key
+        self.news_api_key = "5e881de14ca046469b3028210c06680b"
+        
+        # User preferences storage
+        self.user_preferences = {}
+        
+        # Enhanced conversation context
+        self.conversation_history = []
+        self.last_topic = None
+        self.last_query_time = None
+        self.context_window = 5  # Remember last 5 exchanges
         
         # Response cache to improve performance
         self.response_cache = {}
@@ -390,7 +399,7 @@ class JarvisAssistant:
         current_date = datetime.datetime.now().strftime("%A, %B %d, %Y")
         return f"Today is {current_date}, {self.user_title}."
     
-    def get_day(self):
+    def get_day(self, query=""):
         """Get current day of week"""
         current_day = datetime.datetime.now().strftime("%A")
         return f"Today is {current_day}, {self.user_title}."
@@ -916,11 +925,95 @@ class JarvisAssistant:
             print(f"Error opening news article: {e}")
             return f"I encountered an issue while trying to open the article, {self.user_title}."
     
+    def remember_preference(self, query):
+        """Store user preferences from natural language input"""
+        try:
+            # Extract preference using regex patterns
+            pref_match = re.search(r"remember (?:that )?(?:I|my) ((?:like|prefer|love|hate|don't like|dislike).*)", query, re.IGNORECASE)
+            
+            if pref_match:
+                preference = pref_match.group(1).strip().lower()
+                # Extract the subject and sentiment
+                sentiment = re.search(r"(like|prefer|love|hate|don't like|dislike)", preference).group(1)
+                subject = preference.split(sentiment)[1].strip()
+                
+                # Store the preference
+                self.user_preferences[subject] = {
+                    'sentiment': sentiment,
+                    'timestamp': datetime.datetime.now().isoformat()
+                }
+                
+                self.save_data()  # Save preferences to disk
+                
+                return f"I'll remember that you {sentiment} {subject}, {self.user_title}."
+            else:
+                return f"I'm not sure what preference you'd like me to remember, {self.user_title}. Please be more specific."
+        except Exception as e:
+            print(f"Error storing preference: {e}")
+            return f"I encountered an issue storing your preference, {self.user_title}."
+
+    def get_preference(self, subject):
+        """Retrieve user preference for a given subject"""
+        if subject in self.user_preferences:
+            pref = self.user_preferences[subject]
+            return f"You {pref['sentiment']} {subject}, {self.user_title}."
+        return None
+
+    def handle_followup(self, query):
+        """Handle follow-up questions based on conversation context"""
+        try:
+            if not self.last_topic or not self.last_query_time:
+                return None
+                
+            # Check if this is a follow-up question
+            followup_patterns = [
+                r"^what about",
+                r"^how about",
+                r"^and (?:what|how about)",
+                r"^what (?:else|other)",
+                r"^and (?:then|after)",
+                r"^(?:what|how) (?:about )?(?:tomorrow|yesterday|next|previous|later)"
+            ]
+            
+            is_followup = any(re.search(pattern, query.lower()) for pattern in followup_patterns)
+            
+            if not is_followup:
+                return None
+            
+            # Check if the follow-up is within a reasonable time window (5 minutes)
+            time_diff = datetime.datetime.now() - self.last_query_time
+            if time_diff.total_seconds() > 300:  # 5 minutes
+                return None
+            
+            # Handle time-based follow-ups
+            time_shift = None
+            if "tomorrow" in query.lower():
+                time_shift = datetime.timedelta(days=1)
+            elif "yesterday" in query.lower():
+                time_shift = datetime.timedelta(days=-1)
+            
+            # Reconstruct query based on context
+            if self.last_topic == "weather":
+                if time_shift:
+                    return f"get weather for {(datetime.datetime.now() + time_shift).strftime('%A')}"
+                return "get weather"
+            elif self.last_topic == "news":
+                # Extract category if present in follow-up
+                category_match = re.search(r"(?:what|how) about ([\w\s]+) news", query.lower())
+                if category_match:
+                    return f"get news about {category_match.group(1)}"
+                return "get news"
+            
+            return None
+            
+        except Exception as e:
+            print(f"Error handling follow-up: {e}")
+            return None
+
     def process_command(self, command):
-        """Process user commands and determine appropriate action"""
+        """Process user commands with enhanced context awareness"""
         try:
             # Remove wake word check to respond to all commands
-            # Just clean the command in case wake words are still used out of habit
             clean_command = command.replace("jarvis", "").replace("hey", "").replace("okay", "").strip()
             
             # Log the command being processed
@@ -932,6 +1025,20 @@ class JarvisAssistant:
                 self.active = False
                 return
             
+            # Handle preference storage
+            if "remember" in clean_command.lower():
+                response = self.remember_preference(clean_command)
+                self.speak(response)
+                return
+            
+            # Check for follow-up questions
+            followup_query = self.handle_followup(clean_command)
+            if followup_query:
+                clean_command = followup_query
+            
+            # Update conversation context
+            self.last_query_time = datetime.datetime.now()
+            
             # Check for news article opening command
             if re.search(r"(?:open|show|read)\s+(?:article|news)", clean_command, re.IGNORECASE):
                 response = self.open_news_article(clean_command)
@@ -942,6 +1049,7 @@ class JarvisAssistant:
             for feature_key, feature_func in self.features.items():
                 if feature_key in clean_command:
                     print(f"Feature match found: {feature_key}")
+                    self.last_topic = feature_key  # Store the topic
                     response = feature_func(clean_command)
                     self.speak(response)
                     return
@@ -957,13 +1065,11 @@ class JarvisAssistant:
             response = self.get_gemini_response(clean_command)
             self.speak(response)
             
-            # Explicitly return to ensure we continue the main loop
             return
             
         except Exception as e:
             print(f"Error processing command: {e}")
             self.speak(f"I apologize, {self.user_title}, but I encountered an error processing that command.")
-            # Don't exit the loop on error
             return
     
     def save_data(self):
@@ -974,7 +1080,8 @@ class JarvisAssistant:
                 "notes": self.notes,
                 "reminders": self.reminders,
                 "conversation_history": self.conversation_history,
-                "response_cache": self.response_cache
+                "response_cache": self.response_cache,
+                "user_preferences": self.user_preferences  # Add preferences to saved data
             }
             
             with open("jarvis_data.json", "w") as f:
@@ -995,6 +1102,7 @@ class JarvisAssistant:
                 self.reminders = data.get("reminders", [])
                 self.conversation_history = data.get("conversation_history", [])
                 self.response_cache = data.get("response_cache", {})
+                self.user_preferences = data.get("user_preferences", {})  # Load preferences
                 print("Data loaded successfully")
         except Exception as e:
             print(f"Error loading data: {e}")
