@@ -181,4 +181,4 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - Special thanks to the AI and ML community
 
 ---
-Made with ❤️ by [Your Name] 
+Made with ❤️ by Yaduraj Singh. 
